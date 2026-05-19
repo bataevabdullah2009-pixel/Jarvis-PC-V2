@@ -1,0 +1,449 @@
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from app.core.config import env_debug_status, get_settings, patch_settings
+from app.core.logging import configure_logging
+from app.core.runtime import build_info
+from app.diagnostics.dependencies import check_backend_dependencies
+from app.diagnostics.full_test import run_full_test
+from app.events.websocket_bus import event_bus
+from app.pc.system import get_system_status
+from app.router.ai_planner import AIPlanner
+from app.router.command_router import CommandRouter
+from app.providers.fish_audio import FishAudioTTS
+from app.providers.openrouter import OpenRouterPlanner
+from app.scenarios import music, news, welcome_home, workspace
+from app.storage.command_store import get_commands
+from app.voice.microphone import VoiceDependencyError
+from app.voice.tts import TTSService
+from app.voice.voice_pipeline import VoicePipeline, voice_error_response
+
+
+configure_logging()
+
+app = FastAPI(title="JARVIS PC V2 Backend", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "app://jarvis", "file://", "null"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class CommandRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    source: str = "manual"
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScenarioRequest(BaseModel):
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class SettingsPatchRequest(BaseModel):
+    debug_mode: bool | None = None
+    chatgpt_url: str | None = None
+    news_url: str | None = None
+    news_rss_url: str | None = None
+    workspace_project_path: str | None = None
+    voice_profile: str | None = None
+    voice_wake_enabled: bool | None = None
+    clap_enabled: bool | None = None
+    runtime_mode: str | None = None
+    autostart_enabled: bool | None = None
+    voice_volume: int | None = Field(default=None, ge=0, le=100)
+    offline_mode: bool | None = None
+
+
+class ScenarioTestRequest(BaseModel):
+    scenario: str
+    dry_run: bool = True
+
+
+class MicrophoneTestRequest(BaseModel):
+    device_id: str = "default"
+    duration_seconds: float = Field(default=3, gt=0, le=30)
+
+
+class RecordCommandRequest(BaseModel):
+    device_id: str = "default"
+    max_seconds: float = Field(default=8, gt=0, le=30)
+    send_to_assistant: bool = True
+    text_override: str | None = None
+    dry_run: bool = False
+
+
+class ListenerRequest(BaseModel):
+    wake_word: bool = True
+    clap: bool = True
+    device_id: str = "default"
+
+
+class SayRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+
+
+class ProviderTextRequest(BaseModel):
+    text: str | None = None
+
+
+class FullPipelineTestRequest(BaseModel):
+    text: str = "Джарвис как дела?"
+
+
+def envelope(data: Any, *, ok: bool = True, error: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"ok": ok, "data": data, "error": error}
+
+
+def command_envelope(result: dict[str, Any]) -> dict[str, Any]:
+    ok = not (result.get("route") == "ai_fallback" and result.get("error")) and result.get("status") != "failed"
+    return {
+        **envelope(result, ok=ok, error=result.get("error") if not ok else None),
+        "handled": bool(result.get("handled", True)),
+        "executed": bool(result.get("executed", result.get("status") == "completed")),
+        "route": result.get("route"),
+        "provider": result.get("provider"),
+        "action": result.get("action") or result.get("route"),
+        "text": result.get("text") or result.get("response_text") or "Команда выполнена.",
+        "openrouter_called": bool(result.get("openrouter_called", False)),
+        "fish_audio_called": bool(result.get("fish_audio_called", False)),
+        "local_matched": bool(result.get("local_matched", False)),
+        "model": result.get("model"),
+        "tts": result.get("tts"),
+        "latency": result.get("latency"),
+    }
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    return envelope({"status": "ok", "service": "jarvis-pc-v2-backend"})
+
+
+@app.get("/health/full")
+def health_full() -> dict[str, Any]:
+    settings = get_settings()
+    return envelope(
+        {
+            "backend": "ok",
+            "settings": "ok",
+            "commands": "ok",
+            "voice": "text_only",
+            "ai": "configured" if settings.openrouter_api_key else "not_configured",
+            "tts": "fish_audio" if settings.fish_audio_api_key and settings.fish_audio_voice_id else "not_configured",
+            "warnings": [],
+        }
+    )
+
+
+@app.get("/app/status")
+def app_status() -> dict[str, Any]:
+    settings = get_settings()
+    return envelope(
+        {
+            "app_name": "JARVIS PC V2 Minimal Assistant",
+            "status": "local",
+            "ui": "minimal_assistant",
+            "backend": "ok",
+            "license": "disabled",
+            "version": settings.version,
+        }
+    )
+
+
+@app.get("/runtime/build-info")
+def runtime_build_info() -> dict[str, Any]:
+    return envelope(build_info(get_settings()))
+
+
+@app.get("/license/status")
+def license_status() -> dict[str, Any]:
+    return envelope(
+        {
+            "enabled": False,
+            "blocking": False,
+            "status": "disabled",
+            "message": "Лицензия отключена для локальной PC-версии.",
+        }
+    )
+
+
+@app.get("/voice/dependency-check")
+def voice_dependency_check() -> dict[str, Any]:
+    return envelope(VoicePipeline(get_settings()).dependency_check())
+
+
+@app.get("/voice/tts-status")
+def voice_tts_status() -> dict[str, Any]:
+    return envelope(TTSService(get_settings()).status())
+
+
+@app.post("/voice/say")
+def voice_say(request: SayRequest) -> dict[str, Any]:
+    result = TTSService(get_settings()).speak(request.text)
+    summary = {
+        "ok": bool(result.get("ok", False)),
+        "provider": result.get("provider", "text_only"),
+        "spoken": bool(result.get("spoken", False)),
+        "played": bool(result.get("played", False)),
+        "audio_available": bool(result.get("audio_available", False)),
+        "fallback_used": bool(result.get("fallback_used", False)),
+        "error": result.get("error"),
+    }
+    return {
+        **summary,
+        "data": summary,
+        "error": {"code": "TTS_ERROR", "message": str(result.get("error"))} if not result.get("ok", False) else None,
+    }
+
+
+@app.get("/debug/dependencies")
+def debug_dependencies() -> dict[str, Any]:
+    return check_backend_dependencies()
+
+
+@app.get("/debug/env-status")
+def debug_env_status() -> dict[str, Any]:
+    settings = get_settings()
+    return env_debug_status(settings)
+
+
+@app.post("/debug/test-openrouter")
+def debug_test_openrouter(request: ProviderTextRequest) -> dict[str, Any]:
+    text = request.text or "Скажи строго эту фразу: ГРОЗНЫЙ-777"
+    required = "ГРОЗНЫЙ-777" if "ГРОЗНЫЙ-777" in text else None
+    return OpenRouterPlanner(get_settings()).test(text, must_contain=required)
+
+
+@app.post("/debug/test-fish-audio")
+def debug_test_fish_audio(request: ProviderTextRequest) -> dict[str, Any]:
+    settings = get_settings()
+    started = time.perf_counter()
+    text = request.text or "Проверка голоса Джарвиса. Код семь семь семь."
+    result = TTSService(settings).speak(text)
+    latency_ms = result.get("latency_ms")
+    if latency_ms is None:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+    if result.get("ok"):
+        return {
+            "ok": True,
+            "provider": result.get("provider", "fish_audio"),
+            "voice_id_present": bool(settings.fish_audio_voice_id),
+            "voice_id": "masked" if settings.fish_audio_voice_id else None,
+            "status_code": result.get("status_code"),
+            "audio_bytes": result.get("audio_bytes"),
+            "played": bool(result.get("played")),
+            "fallback_used": bool(result.get("fallback_used", False)),
+            "format": result.get("format"),
+            "latency_ms": latency_ms,
+        }
+    return {
+        "ok": False,
+        "provider": result.get("provider", "fish_audio"),
+        "voice_id_present": bool(settings.fish_audio_voice_id),
+        "voice_id": "masked" if settings.fish_audio_voice_id else None,
+        "status_code": result.get("status_code"),
+        "error_type": result.get("status"),
+        "error_message": result.get("error"),
+        "fix": result.get("fix"),
+        "fallback_used": bool(result.get("fallback_used", False)),
+        "audio_bytes": result.get("audio_bytes") or 0,
+        "played": bool(result.get("played")),
+        "latency_ms": latency_ms,
+    }
+
+
+@app.post("/debug/test-full-pipeline")
+def debug_test_full_pipeline(request: FullPipelineTestRequest) -> dict[str, Any]:
+    return CommandRouter(get_settings()).handle(
+        request.text,
+        source="debug_full_pipeline",
+        context={"tts_wait": True},
+    )
+
+
+@app.get("/voice/devices")
+def voice_devices() -> dict[str, Any]:
+    try:
+        return envelope(VoicePipeline(get_settings()).devices())
+    except VoiceDependencyError as exc:
+        return envelope(None, ok=False, error=voice_error_response(exc))
+
+
+@app.post("/voice/test-microphone")
+def voice_test_microphone(request: MicrophoneTestRequest) -> dict[str, Any]:
+    event_bus.emit("voice.microphone.test.started", {"device_id": request.device_id})
+    try:
+        result = VoicePipeline(get_settings()).test_microphone(
+            device_id=request.device_id,
+            duration_seconds=request.duration_seconds,
+        )
+    except VoiceDependencyError as exc:
+        event_bus.emit("voice.error", {"code": exc.code})
+        return envelope(None, ok=False, error=voice_error_response(exc))
+
+    event_bus.emit("voice.microphone.test.completed", {"device_id": request.device_id, "rms": result["rms"]})
+    return envelope(result)
+
+
+@app.post("/voice/record-command")
+def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
+    event_bus.emit("voice.recording.started", {"device_id": request.device_id})
+    try:
+        result = VoicePipeline(get_settings()).record_command(
+            device_id=request.device_id,
+            max_seconds=request.max_seconds,
+            send_to_assistant=request.send_to_assistant,
+            text_override=request.text_override,
+            dry_run=request.dry_run,
+        )
+    except VoiceDependencyError as exc:
+        event_bus.emit("voice.error", {"code": exc.code})
+        return envelope(None, ok=False, error=voice_error_response(exc))
+
+    event_bus.emit(
+        "voice.recording.completed",
+        {"device_id": request.device_id, "transcript_available": bool(result.get("transcript"))},
+    )
+    return envelope(result)
+
+
+@app.post("/voice/start-listener")
+def voice_start_listener(request: ListenerRequest) -> dict[str, Any]:
+    result = VoicePipeline(get_settings()).start_listener(
+        wake_word=request.wake_word,
+        clap=request.clap,
+        device_id=request.device_id,
+    )
+    event_bus.emit("voice.listener.started", result)
+    return envelope(result)
+
+
+@app.post("/voice/stop-listener")
+def voice_stop_listener() -> dict[str, Any]:
+    result = VoicePipeline(get_settings()).stop_listener()
+    event_bus.emit("voice.listener.stopped", result)
+    return envelope(result)
+
+
+@app.post("/assistant/command")
+def assistant_command(request: CommandRequest) -> dict[str, Any]:
+    router = CommandRouter(get_settings())
+    result = router.handle(request.text, source=request.source, context=request.context)
+    return command_envelope(result)
+
+
+@app.post("/assistant/plan")
+def assistant_plan(request: PlanRequest) -> dict[str, Any]:
+    planner = AIPlanner(get_settings())
+    return envelope(planner.plan(request.text).to_dict())
+
+
+@app.post("/scenarios/welcome-home")
+def scenario_welcome_home(request: ScenarioRequest) -> dict[str, Any]:
+    result = welcome_home.run(get_settings(), dry_run=bool(request.context.get("dry_run", False)))
+    return envelope(result)
+
+
+@app.post("/scenarios/news")
+def scenario_news(request: ScenarioRequest) -> dict[str, Any]:
+    result = news.run(get_settings(), dry_run=bool(request.context.get("dry_run", False)))
+    return envelope(result)
+
+
+@app.post("/news/open-and-read")
+def news_open_and_read(request: ScenarioRequest) -> dict[str, Any]:
+    result = news.run(get_settings(), dry_run=bool(request.context.get("dry_run", False)))
+    return envelope(result)
+
+
+@app.post("/scenarios/workspace")
+def scenario_workspace(request: ScenarioRequest) -> dict[str, Any]:
+    result = workspace.run(get_settings(), dry_run=bool(request.context.get("dry_run", False)))
+    return envelope(result)
+
+
+@app.post("/scenarios/music")
+def scenario_music(request: ScenarioRequest) -> dict[str, Any]:
+    query = str(request.context.get("query", "Back in Black"))
+    result = music.run(get_settings(), dry_run=bool(request.context.get("dry_run", False)), query=query)
+    return envelope(result)
+
+
+@app.get("/settings")
+def settings() -> dict[str, Any]:
+    return envelope(get_settings().sanitized())
+
+
+@app.patch("/settings")
+def settings_patch(request: SettingsPatchRequest) -> dict[str, Any]:
+    patch = request.model_dump(exclude_none=True)
+    updated = patch_settings(patch)
+    return envelope(updated.sanitized())
+
+
+@app.get("/commands")
+def commands() -> dict[str, Any]:
+    return envelope(get_commands())
+
+
+@app.get("/diagnostics/full-test")
+def diagnostics_full_test() -> dict[str, Any]:
+    return envelope(run_full_test(get_settings()))
+
+
+@app.post("/diagnostics/full-test")
+def diagnostics_full_test_post() -> dict[str, Any]:
+    return envelope(run_full_test(get_settings()))
+
+
+@app.get("/diagnostics/system-monitor")
+def diagnostics_system_monitor() -> dict[str, Any]:
+    return envelope(get_system_status())
+
+
+@app.post("/diagnostics/scenario-test")
+def diagnostics_scenario_test(request: ScenarioTestRequest) -> dict[str, Any]:
+    settings = get_settings()
+    if request.scenario == "welcome_home":
+        return envelope(welcome_home.run(settings, dry_run=request.dry_run))
+    if request.scenario == "news":
+        return envelope(news.run(settings, dry_run=request.dry_run))
+    if request.scenario == "workspace":
+        return envelope(workspace.run(settings, dry_run=request.dry_run))
+    if request.scenario == "music":
+        return envelope(music.run(settings, dry_run=request.dry_run))
+    return envelope(
+        None,
+        ok=False,
+        error={"code": "UNKNOWN_SCENARIO", "message": "Сценарий не найден.", "details": {"scenario": request.scenario}},
+    )
+
+
+@app.websocket("/ws/events")
+async def websocket_events(websocket: WebSocket) -> None:
+    await websocket.accept()
+    offset = 0
+    snapshot = event_bus.recent()
+    offset = len(snapshot)
+    await websocket.send_json({"type": "events.snapshot", "payload": snapshot})
+    try:
+        while True:
+            offset, events = event_bus.recent_since(offset)
+            for event in events:
+                await websocket.send_json(event)
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        return

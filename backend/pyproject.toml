@@ -1,0 +1,11 @@
+[project]
+name = "jarvis-pc-v2-backend"
+version = "0.1.0"
+description = "JARVIS PC V2 local Windows assistant backend"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+

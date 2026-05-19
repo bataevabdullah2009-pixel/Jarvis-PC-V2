@@ -1,0 +1,4 @@
+{
+  "scenarios": ["welcome_home", "news", "workspace", "music", "location"]
+}
+

@@ -1,0 +1,17 @@
+Archive directory: _archive/old_builds/2026-05-18_16-57
+
+Found:
+- dist
+- release
+- frontend/dist
+- frontend/backend_package/JarvisBackend.exe
+
+Archived:
+- dist -> _archive/old_builds/2026-05-18_16-57/dist
+- release -> _archive/old_builds/2026-05-18_16-57/release
+- frontend/dist -> _archive/old_builds/2026-05-18_16-57/frontend/dist
+- frontend/backend_package/JarvisBackend.exe -> _archive/old_builds/2026-05-18_16-57/frontend/backend_package/JarvisBackend.exe
+
+Skipped:
+
+Manual review:

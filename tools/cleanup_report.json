@@ -1,0 +1,29 @@
+{
+  "archive_dir": "_archive/old_builds/2026-05-18_16-57",
+  "found": [
+    "dist",
+    "release",
+    "frontend/dist",
+    "frontend/backend_package/JarvisBackend.exe"
+  ],
+  "archived": [
+    {
+      "from": "dist",
+      "to": "_archive/old_builds/2026-05-18_16-57/dist"
+    },
+    {
+      "from": "release",
+      "to": "_archive/old_builds/2026-05-18_16-57/release"
+    },
+    {
+      "from": "frontend/dist",
+      "to": "_archive/old_builds/2026-05-18_16-57/frontend/dist"
+    },
+    {
+      "from": "frontend/backend_package/JarvisBackend.exe",
+      "to": "_archive/old_builds/2026-05-18_16-57/frontend/backend_package/JarvisBackend.exe"
+    }
+  ],
+  "skipped": [],
+  "manual_review": []
+}

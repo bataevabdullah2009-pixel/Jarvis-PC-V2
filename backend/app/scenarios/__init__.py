@@ -1,0 +1,2 @@
+"""Deterministic assistant scenarios."""
+

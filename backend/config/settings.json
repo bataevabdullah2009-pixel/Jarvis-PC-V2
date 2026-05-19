@@ -1,0 +1,19 @@
+{
+  "app_name": "JARVIS PC V2",
+  "version": "0.1.0",
+  "phase": "phase-5",
+  "debug_mode": false,
+  "chatgpt_url": "https://chatgpt.com",
+  "news_url": "https://news.google.com/topstories?hl=ru&gl=RU&ceid=RU:ru",
+  "news_rss_url": "https://news.google.com/rss?hl=ru&gl=RU&ceid=RU:ru",
+  "kion_music_search_url": "https://music.kion.ru/search?text={query}",
+  "workspace_project_path": "C:\\Jarvis\\jarvis-car",
+  "open_terminal_with_workspace": false,
+  "voice_profile": "Jarvis style",
+  "offline_mode": false,
+  "vosk_model_path": "backend\\models\\vosk-model-small-ru-0.22",
+  "clap_enabled": true,
+  "voice_volume": 82,
+  "voice_wake_enabled": true,
+  "runtime_mode": "online"
+}

@@ -1,0 +1,148 @@
+{
+  "commands": [
+    {
+      "id": "say_hello",
+      "name": "Скажи привет",
+      "phrases": ["скажи привет", "джарвис скажи привет", "поприветствуй меня"],
+      "action": "respond_text",
+      "value": "Привет, сэр. Я на связи.",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_browser",
+      "name": "Открыть браузер",
+      "phrases": ["открой браузер", "запусти браузер"],
+      "action": "open_app",
+      "value": "browser",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_telegram",
+      "name": "Открыть Telegram",
+      "phrases": ["открой телеграм", "запусти телеграм"],
+      "action": "open_app",
+      "value": "telegram",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_discord",
+      "name": "Открыть Discord",
+      "phrases": ["открой discord", "запусти дискорд"],
+      "action": "open_app",
+      "value": "discord",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_youtube",
+      "name": "Открыть YouTube",
+      "phrases": ["открой youtube", "открой ютуб"],
+      "action": "open_url",
+      "value": "https://youtube.com",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_vscode",
+      "name": "Открыть VS Code",
+      "phrases": ["открой vs code", "запусти visual studio code"],
+      "action": "open_app",
+      "value": "vs code",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_chatgpt",
+      "name": "Открыть ChatGPT",
+      "phrases": ["открой chatgpt", "открой чат gpt"],
+      "action": "open_url",
+      "value": "https://chatgpt.com",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_explorer",
+      "name": "Открыть проводник",
+      "phrases": ["открой проводник", "запусти проводник"],
+      "action": "open_app",
+      "value": "explorer",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_task_manager",
+      "name": "Открыть диспетчер задач",
+      "phrases": ["открой диспетчер задач"],
+      "action": "open_app",
+      "value": "taskmgr",
+      "confirmation_required": false
+    },
+    {
+      "id": "screenshot",
+      "name": "Сделать скриншот",
+      "phrases": ["сделай скриншот"],
+      "action": "screenshot",
+      "value": "desktop",
+      "confirmation_required": false
+    },
+    {
+      "id": "volume_up",
+      "name": "Увеличить громкость",
+      "phrases": ["увеличь громкость", "сделай громче"],
+      "action": "volume_up",
+      "value": "system",
+      "confirmation_required": false
+    },
+    {
+      "id": "volume_down",
+      "name": "Уменьшить громкость",
+      "phrases": ["уменьши громкость", "сделай тише"],
+      "action": "volume_down",
+      "value": "system",
+      "confirmation_required": false
+    },
+    {
+      "id": "mute",
+      "name": "Выключить звук",
+      "phrases": ["выключи звук"],
+      "action": "mute",
+      "value": "system",
+      "confirmation_required": false
+    },
+    {
+      "id": "unmute",
+      "name": "Включить звук",
+      "phrases": ["включи звук"],
+      "action": "unmute",
+      "value": "system",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_music",
+      "name": "Открыть музыку",
+      "phrases": ["открыть музыку", "back in black"],
+      "action": "play_music_search",
+      "value": "Back in Black",
+      "confirmation_required": false
+    },
+    {
+      "id": "open_news",
+      "name": "Открыть новости",
+      "phrases": ["открой новости", "прочитай новости"],
+      "action": "read_news",
+      "value": "top",
+      "confirmation_required": false
+    },
+    {
+      "id": "workspace",
+      "name": "Рабочая среда",
+      "phrases": ["рабочая среда", "настрой мою среду работы"],
+      "action": "scenario",
+      "value": "workspace",
+      "confirmation_required": false
+    },
+    {
+      "id": "welcome_home",
+      "name": "Я вернулся",
+      "phrases": ["я вернулся", "я дома"],
+      "action": "scenario",
+      "value": "welcome_home",
+      "confirmation_required": false
+    }
+  ]
+}
