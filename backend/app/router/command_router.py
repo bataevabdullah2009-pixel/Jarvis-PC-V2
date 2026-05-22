@@ -178,7 +178,7 @@ class CommandRouter:
         pipeline_logger.info("[OPENROUTER] response_text_preview=%s", plan.response_text_preview)
         pipeline_logger.info("[OPENROUTER] raw_response_preview=%s", plan.raw_response_preview)
         pipeline_logger.info("[OPENROUTER] error=%s", plan.error_message or plan.error)
-        if plan.status == "answered":
+        if plan.status in {"answered", "fallback"}:
             return self._finalize(
                 command_id=command_id,
                 route="ai_fallback",
@@ -205,7 +205,7 @@ class CommandRouter:
             response_text=plan.answer_text,
             actions=[],
             requires_confirmation=False,
-            forbidden=True,
+            forbidden=False,
             extra={
                 "model": plan.model or self.settings.openrouter_model,
                 "error": {
@@ -216,7 +216,7 @@ class CommandRouter:
                 "plan": plan.to_dict(),
             },
             tts_dry_run=dry_run,
-            skip_tts=True,
+            skip_tts=False,
             started=started,
             router_ms=int((ai_started - route_started) * 1000),
             ai_ms=ai_ms,
@@ -318,6 +318,14 @@ class CommandRouter:
                 "text": safe_text[:500],
             }
             tts_ms = 0
+        elif not self._tts_wait and not tts_dry_run:
+            tts_result = self._queued_tts_result(safe_text)
+            tts_ms = 0
+            threading.Thread(
+                target=self._run_tts_background,
+                args=(command_id, route, safe_text),
+                daemon=True
+            ).start()
         else:
             tts_result = self.tts.speak(safe_text, dry_run=tts_dry_run)
             tts_ms = int((time.perf_counter() - tts_started) * 1000)

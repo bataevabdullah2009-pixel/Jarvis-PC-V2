@@ -98,3 +98,229 @@ def test_assistant_command_contract_ai(monkeypatch) -> None:
     data = response.json()["data"]
     assert data["route"] == "ai_fallback"
     assert "Идея" in data["response_text"]
+
+
+def test_assistant_ask_local_command() -> None:
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Джарвис, я вернулся",
+            "speak": False,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["mode"] == "local"
+    assert data["route"] == "scenario"
+    assert data["route_detail"] == "scenario:welcome_home"
+    assert data["executed"] is True
+    assert len(data["actions"]) > 0
+
+
+def test_assistant_ask_ai_without_key(monkeypatch) -> None:
+    # Temporarily clean API keys to force fallback by monkeypatching get_settings
+    from app.core.config import Settings
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = None
+    settings_inst.groq_api_key = None
+
+    monkeypatch.setattr("app.main.get_settings", lambda: settings_inst)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings_inst)
+
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Джарвис, как дела?",
+            "speak": False,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["mode"] == "ai_limited"
+    assert data["provider"] == "none"
+    assert "не подключён" in data["response_text"]
+
+
+def test_setup_readiness() -> None:
+    response = client.get("/setup/readiness")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["backend_ok"] is True
+    assert data["assistant_ask_ok"] is True
+    assert "local_commands_ok" in data
+    assert "openrouter_configured" in data
+    assert "openrouter_model" in data
+    assert "fish_audio_configured" in data
+    assert "tts_primary" in data
+    assert "tts_fallback_enabled" in data
+    assert "tts_fallback_ready" in data
+    assert "microphone_dependency_ok" in data
+    assert "voice_pipeline_ok" in data
+    assert data["hud_events_ok"] is True
+    assert "warnings" in data
+
+
+def test_commands_test_diagnostic() -> None:
+    response = client.get("/commands/test", params={"text": "я вернулся"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["normalized"] == "я вернулся"
+    assert data["diagnostic"] is True
+    assert data["matched"]["action"] == "scenario"
+    assert data["matched"]["value"] == "welcome_home"
+
+
+def test_assistant_ask_no_key_no_crash(monkeypatch) -> None:
+    from app.core.config import Settings
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = None
+    settings_inst.groq_api_key = None
+    monkeypatch.setattr("app.main.get_settings", lambda: settings_inst)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings_inst)
+
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Как дела?",
+            "speak": True,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["mode"] == "ai_limited"
+    assert "не подключён" in body["data"]["response_text"]
+
+
+def test_assistant_ask_mock_ai_success(monkeypatch) -> None:
+    from app.core.config import Settings
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = "fake_key"
+    monkeypatch.setattr("app.main.get_settings", lambda: settings_inst)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings_inst)
+
+    def fake_plan(self, text: str) -> PlannerResult:
+        return PlannerResult(
+            status="answered",
+            answer_text="Привет, сэр! Все системы функционируют отлично.",
+            actions=[],
+            provider="openrouter",
+            model="openai/gpt-4o-mini",
+            openrouter_called=True,
+            status_code=200,
+            latency_ms=150
+        )
+    monkeypatch.setattr(AIPlanner, "plan", fake_plan)
+
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Джарвис, как дела?",
+            "speak": False,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["mode"] == "ai"
+    assert body["data"]["provider"] == "openrouter"
+    assert "Привет, сэр" in body["data"]["response_text"]
+
+
+def test_local_command_without_openrouter(monkeypatch) -> None:
+    from app.core.config import Settings
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = None
+    settings_inst.groq_api_key = None
+    monkeypatch.setattr("app.main.get_settings", lambda: settings_inst)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings_inst)
+
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Джарвис, я вернулся",
+            "speak": False,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["mode"] == "local"
+    assert body["data"]["route_detail"] == "scenario:welcome_home"
+
+
+def test_tts_fallback(monkeypatch) -> None:
+    from app.voice.speech_orchestrator import SpeechOrchestrator
+    
+    def fake_say(self, text: str, *, dry_run: bool = False) -> dict:
+        return {
+            "requested": True,
+            "ok": True,
+            "provider": "pyttsx3",
+            "mode": "pyttsx3",
+            "spoken": True,
+            "played": True,
+            "audio_available": False,
+            "fallback_used": True,
+            "error": None,
+            "text": text,
+            "status": "completed",
+            "latency_ms": 100,
+            "audio_bytes": 0,
+            "format": "wav"
+        }
+    monkeypatch.setattr(SpeechOrchestrator, "say", fake_say)
+
+    response = client.post(
+        "/voice/say",
+        json={"text": "Привет от Джарвиса"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["fallback_used"] is True
+    assert body["data"]["provider"] == "pyttsx3"
+
+
+def test_existing_endpoints_still_work() -> None:
+    resp1 = client.get("/health")
+    assert resp1.status_code == 200
+    assert resp1.json()["ok"] is True
+
+    resp2 = client.get("/health/full")
+    assert resp2.status_code == 200
+    assert resp2.json()["ok"] is True
+
+    resp3 = client.get("/voice/tts-status")
+    assert resp3.status_code == 200
+    assert resp3.json()["ok"] is True
+
+    resp4 = client.post(
+        "/assistant/command",
+        json={
+            "text": "Джарвис, я вернулся",
+            "source": "test",
+            "context": {"dry_run": True},
+        },
+    )
+    assert resp4.status_code == 200
+    assert resp4.json()["ok"] is True
+

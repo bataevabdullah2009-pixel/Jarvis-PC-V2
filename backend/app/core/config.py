@@ -86,7 +86,7 @@ def _load_env_file(path: Path) -> bool:
         try:
             from dotenv import load_dotenv
 
-            load_dotenv(path, override=False)
+            load_dotenv(path, override=True)
         except ImportError:
             for raw_line in path.read_text(encoding="utf-8").splitlines():
                 line = raw_line.strip()
@@ -95,7 +95,7 @@ def _load_env_file(path: Path) -> bool:
                 key, value = line.split("=", 1)
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                os.environ.setdefault(key, value)
+                os.environ[key] = value
     except Exception as exc:
         ENV_LOAD_ERRORS[str(path)] = f"{exc.__class__.__name__}: {exc}"
         return False
@@ -207,12 +207,17 @@ class Settings:
     vosk_model_path: str = "backend\\models\\vosk-model-small-ru-0.22"
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-4o-mini"
+    groq_api_key: str | None = None
+    groq_model: str = "llama3-8b-8192"
     fish_audio_api_key: str | None = None
     fish_audio_voice_id: str | None = None
+    resemble_api_key: str | None = None
+    resemble_project_id: str | None = None
+    resemble_voice_id: str | None = None
     tts_primary: str = "fish_audio"
-    tts_fallback_enabled: bool = False
+    tts_fallback_enabled: bool = True
     tts_fallback: str = "pyttsx3"
-    tts_require_fish_audio: bool = True
+    tts_require_fish_audio: bool = False
     tts_timeout_seconds: int = 25
     allowed_apps: dict[str, list[str]] = field(
         default_factory=lambda: {
@@ -240,8 +245,13 @@ class Settings:
         settings = cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
         settings.openrouter_api_key = env_value("JARVIS_OPENROUTER_API_KEY", "OPENROUTER_API_KEY")
         settings.openrouter_model = env_value("JARVIS_OPENROUTER_MODEL", "OPENROUTER_MODEL", default=settings.openrouter_model) or settings.openrouter_model
+        settings.groq_api_key = env_value("JARVIS_GROQ_API_KEY", "GROQ_API_KEY")
+        settings.groq_model = env_value("JARVIS_GROQ_MODEL", "GROQ_MODEL", default=settings.groq_model) or settings.groq_model
         settings.fish_audio_api_key = env_value("JARVIS_FISH_AUDIO_API_KEY", "FISH_AUDIO_API_KEY")
         settings.fish_audio_voice_id = env_value("JARVIS_FISH_AUDIO_VOICE_ID", "FISH_AUDIO_VOICE_ID")
+        settings.resemble_api_key = env_value("JARVIS_RESEMBLE_API_KEY", "RESEMBLE_API_KEY")
+        settings.resemble_project_id = env_value("JARVIS_RESEMBLE_PROJECT_ID", "RESEMBLE_PROJECT_ID")
+        settings.resemble_voice_id = env_value("JARVIS_RESEMBLE_VOICE_ID", "RESEMBLE_VOICE_ID")
         settings.tts_primary = env_value("TTS_PRIMARY", default=settings.tts_primary) or settings.tts_primary
         settings.tts_fallback = env_value("TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
         settings.tts_fallback_enabled = env_bool("TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
@@ -274,8 +284,12 @@ class Settings:
             "offline_mode": self.offline_mode,
             "vosk_model_path": self.vosk_model_path,
             "openrouter_configured": bool(self.openrouter_api_key),
+            "groq_configured": bool(self.groq_api_key),
             "fish_audio_configured": bool(self.fish_audio_api_key),
             "fish_audio_voice_configured": bool(self.fish_audio_voice_id),
+            "resemble_configured": bool(self.resemble_api_key),
+            "resemble_project_configured": bool(self.resemble_project_id),
+            "resemble_voice_configured": bool(self.resemble_voice_id),
             "tts_primary": self.tts_primary,
             "tts_fallback": self.tts_fallback,
             "tts_fallback_enabled": self.tts_fallback_enabled,

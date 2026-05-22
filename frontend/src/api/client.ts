@@ -248,7 +248,7 @@ function friendlyFetchMessage(path: string, error: unknown): string {
   if (path.includes("/news/") || path.includes("/scenarios/news")) {
     return "Новости недоступны";
   }
-  if (path.includes("/assistant/command")) {
+  if (path.includes("/assistant/command") || path.includes("/assistant/ask")) {
     return "Backend недоступен";
   }
   return "Backend недоступен";
@@ -358,9 +358,9 @@ export const api = {
       body: JSON.stringify({ device_id: "default", max_seconds: 4, send_to_assistant: true })
     }),
   sendCommand: (text: string) =>
-    request<CommandResult>("/assistant/command", {
+    request<CommandResult>("/assistant/ask", {
       method: "POST",
-      body: JSON.stringify({ text, source: "minimal_ui", context: {} })
+      body: JSON.stringify({ text, speak: true, source: "hud", context: {} })
     }),
   scenario: (name: "welcome-home" | "news" | "workspace" | "music") => {
     const pathByName = {

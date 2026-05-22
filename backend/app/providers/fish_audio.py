@@ -21,6 +21,7 @@ FISH_TOTAL_TIMEOUT_SECONDS = 25.0
 MAX_RETRIES = 1
 _AUDIO_CACHE: dict[str, dict[str, Any]] = {}
 _CACHEABLE_TEXT_LENGTH = 500
+_LAST_PLAYED_AUDIO: bytes | None = None
 
 
 def _provider_logger(name: str, filename: str) -> logging.Logger:
@@ -73,6 +74,19 @@ class FishAudioTTS:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._client: httpx.Client | None = None
+
+    def _get_client(self) -> httpx.Client:
+        if self._client is None or self._client.is_closed:
+            timeout = httpx.Timeout(
+                FISH_TOTAL_TIMEOUT_SECONDS,
+                connect=10.0,  # Increased to 10s for SSL handshake stability
+                read=READ_TIMEOUT_SECONDS,
+                write=5.0,
+                pool=10.0,
+            )
+            self._client = httpx.Client(timeout=timeout, trust_env=True)
+        return self._client
 
     def available(self) -> bool:
         return bool(self.settings.fish_audio_api_key and self.settings.fish_audio_voice_id)
@@ -149,8 +163,8 @@ class FishAudioTTS:
         for attempt in range(MAX_RETRIES + 1):
             retry_count = attempt
             try:
-                with httpx.Client(timeout=timeout, trust_env=True) as client:
-                    response = client.post(self.endpoint, headers=headers, json=payload)
+                client = self._get_client()
+                response = client.post(self.endpoint, headers=headers, json=payload)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 status_code = response.status_code
                 if status_code >= 400:
@@ -350,11 +364,52 @@ class FishAudioTTS:
 
     @staticmethod
     def _play_audio(audio: bytes, audio_format: str) -> None:
+        global _LAST_PLAYED_AUDIO
         suffix = ".mp3" if audio_format == "mp3" else ".wav"
-        temp_path = Path(tempfile.gettempdir()) / f"jarvis_pc_v2_tts{suffix}"
-        temp_path.write_bytes(audio)
         if suffix == ".wav":
-            winsound.PlaySound(str(temp_path), winsound.SND_FILENAME)
+            import struct
+            import threading
+
+            patched_audio = audio
+            if len(audio) >= 44:
+                try:
+                    riff, file_size, wave = struct.unpack("<4sI4s", audio[:12])
+                    if riff == b"RIFF" and wave == b"WAVE":
+                        offset = 12
+                        data_chunk_offset = -1
+                        while offset < len(audio) - 8:
+                            chunk_id, chunk_size = struct.unpack("<4sI", audio[offset:offset+8])
+                            if chunk_id == b"data":
+                                data_chunk_offset = offset
+                                break
+                            if chunk_size < 0 or offset + 8 + chunk_size > len(audio):
+                                break
+                            offset += 8 + chunk_size
+
+                        if data_chunk_offset != -1:
+                            patched_data = bytearray(audio)
+                            struct.pack_into("<I", patched_data, 4, len(audio) - 8)
+                            struct.pack_into("<I", patched_data, data_chunk_offset + 4, len(audio) - (data_chunk_offset + 8))
+                            patched_audio = bytes(patched_data)
+                except Exception:
+                    pass
+
+            try:
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except Exception:
+                pass
+
+            _LAST_PLAYED_AUDIO = patched_audio
+
+            # Play synchronously inside a daemon thread because Python's winsound.PlaySound
+            # blocks combining SND_MEMORY with SND_ASYNC.
+            def _play_thread():
+                try:
+                    winsound.PlaySound(patched_audio, winsound.SND_MEMORY)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_play_thread, daemon=True).start()
             return
         raise RuntimeError("mp3 playback is not supported by winsound")
 

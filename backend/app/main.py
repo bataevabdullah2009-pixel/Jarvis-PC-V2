@@ -24,6 +24,8 @@ from app.storage.command_store import get_commands
 from app.voice.microphone import VoiceDependencyError
 from app.voice.tts import TTSService
 from app.voice.voice_pipeline import VoicePipeline, voice_error_response
+from app.core.assistant_orchestrator import AssistantOrchestrator
+import pygame
 
 
 configure_logging()
@@ -41,6 +43,13 @@ app.add_middleware(
 class CommandRequest(BaseModel):
     text: str = Field(..., min_length=1)
     source: str = "manual"
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class AskRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    speak: bool = True
+    source: str = "hud"
     context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -109,11 +118,13 @@ def envelope(data: Any, *, ok: bool = True, error: dict[str, Any] | None = None)
 
 
 def command_envelope(result: dict[str, Any]) -> dict[str, Any]:
-    ok = not (result.get("route") == "ai_fallback" and result.get("error")) and result.get("status") != "failed"
+    ok = bool(result.get("ok", True))
+    if result.get("mode") in {"ai_limited", "local", "text_only"}:
+        ok = True
     return {
         **envelope(result, ok=ok, error=result.get("error") if not ok else None),
         "handled": bool(result.get("handled", True)),
-        "executed": bool(result.get("executed", result.get("status") == "completed")),
+        "executed": bool(result.get("executed", result.get("status") == "completed" or result.get("mode") in {"ai_limited", "local", "text_only"})),
         "route": result.get("route"),
         "provider": result.get("provider"),
         "action": result.get("action") or result.get("route"),
@@ -338,10 +349,27 @@ def voice_stop_listener() -> dict[str, Any]:
     return envelope(result)
 
 
+@app.post("/assistant/ask")
+async def assistant_ask(request: AskRequest) -> dict[str, Any]:
+    orchestrator = AssistantOrchestrator(get_settings())
+    result = await orchestrator.ask(
+        text=request.text,
+        speak=request.speak,
+        source=request.source,
+        context=request.context,
+    )
+    return command_envelope(result)
+
+
 @app.post("/assistant/command")
-def assistant_command(request: CommandRequest) -> dict[str, Any]:
-    router = CommandRouter(get_settings())
-    result = router.handle(request.text, source=request.source, context=request.context)
+async def assistant_command(request: CommandRequest) -> dict[str, Any]:
+    orchestrator = AssistantOrchestrator(get_settings())
+    result = await orchestrator.ask(
+        text=request.text,
+        speak=True,
+        source=request.source,
+        context=request.context,
+    )
     return command_envelope(result)
 
 
@@ -349,6 +377,99 @@ def assistant_command(request: CommandRequest) -> dict[str, Any]:
 def assistant_plan(request: PlanRequest) -> dict[str, Any]:
     planner = AIPlanner(get_settings())
     return envelope(planner.plan(request.text).to_dict())
+
+
+@app.get("/setup/readiness")
+def setup_readiness() -> dict[str, Any]:
+    settings = get_settings()
+    warnings: list[str] = []
+
+    # 1. Check AI configuration
+    openrouter_configured = bool(settings.openrouter_api_key)
+    if not openrouter_configured:
+        warnings.append("OpenRouter API key is missing. AI responses will operate in limited fallback mode.")
+
+    # 2. Check Fish Audio configuration
+    fish_audio_configured = bool(settings.fish_audio_api_key)
+    if not fish_audio_configured and settings.tts_primary == "fish_audio":
+        warnings.append("Fish Audio API key is missing. Primary TTS is set to fish_audio but will fall back to secondary TTS.")
+
+    # 3. Check offline TTS fallback readiness
+    tts_fallback_ready = False
+    try:
+        from app.providers.offline_tts import OfflineTTS
+        offline = OfflineTTS(settings)
+        tts_fallback_ready = offline.available()
+    except Exception as e:
+        warnings.append(f"Offline TTS fallback check failed: {e}")
+
+    # 4. Check microphone dependency
+    microphone_dependency_ok = True
+    try:
+        import pyaudio
+    except ImportError:
+        microphone_dependency_ok = False
+        warnings.append("PyAudio dependency is not installed. Live microphone listening is unavailable.")
+
+    # 5. Check voice pipeline
+    voice_pipeline_ok = True
+    try:
+        from app.voice.voice_pipeline import VoicePipeline
+        pipe = VoicePipeline(settings)
+        # Verify it can be instantiated
+    except Exception as e:
+        voice_pipeline_ok = False
+        warnings.append(f"Voice pipeline failed to initialize: {e}")
+
+    # 6. Check local commands
+    local_commands_ok = True
+    try:
+        from app.storage.command_store import get_commands
+        cmds = get_commands()
+        if not cmds or not cmds.get("commands"):
+            local_commands_ok = False
+            warnings.append("Local commands list is empty or invalid.")
+    except Exception as e:
+        local_commands_ok = False
+        warnings.append(f"Failed to load local commands: {e}")
+
+    return envelope({
+        "backend_ok": True,
+        "assistant_ask_ok": True,
+        "local_commands_ok": local_commands_ok,
+        "openrouter_configured": openrouter_configured,
+        "openrouter_model": settings.openrouter_model or "openai/gpt-4o-mini",
+        "fish_audio_configured": fish_audio_configured,
+        "tts_primary": settings.tts_primary or "fish_audio",
+        "tts_fallback_enabled": settings.tts_fallback_enabled,
+        "tts_fallback_ready": tts_fallback_ready,
+        "microphone_dependency_ok": microphone_dependency_ok,
+        "voice_pipeline_ok": voice_pipeline_ok,
+        "hud_events_ok": True,
+        "warnings": warnings
+    })
+
+
+@app.get("/commands/test")
+def commands_test(text: str) -> dict[str, Any]:
+    from app.router.intent_detector import normalize_text
+    from app.storage.command_store import get_commands
+
+    normalized = normalize_text(text)
+    matched = None
+    for command in get_commands().get("commands", []):
+        phrases = command.get("phrases") or command.get("triggers") or []
+        normalized_phrases = {normalize_text(str(phrase)) for phrase in phrases}
+        if normalized in normalized_phrases or any(phrase and phrase in normalized for phrase in normalized_phrases):
+            matched = command
+            break
+
+    return envelope({
+        "input": text,
+        "normalized": normalized,
+        "matched": matched,
+        "diagnostic": True,
+    })
 
 
 @app.post("/scenarios/welcome-home")
