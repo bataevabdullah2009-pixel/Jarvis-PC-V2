@@ -108,7 +108,7 @@ Write-Host ""
 try {
     Write-Host "Launching Electron Dev Client..." -ForegroundColor Green
     Set-Location "$root\frontend"
-    npm run electron
+    npm.cmd run electron
 }
 catch {
     Write-Host "An error occurred while running Electron: $_" -ForegroundColor Red

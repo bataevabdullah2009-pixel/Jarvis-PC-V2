@@ -51,8 +51,8 @@ try {
     # 5. Build Frontend (npm install & npm run build)
     Write-Host "Installing frontend dependencies & building Vite bundle..." -ForegroundColor Yellow
     Set-Location "$root\frontend"
-    npm install
-    npm run build
+    npm.cmd install
+    npm.cmd run build
 
     # 6. Build Backend Exe
     Write-Host "Compiling Python Backend via PyInstaller..." -ForegroundColor Yellow
@@ -80,7 +80,7 @@ try {
     Write-Host "Packaging Electron application into folder..." -ForegroundColor Yellow
     Set-Location "$root\frontend"
     # Using package:dir which does electron-builder --dir
-    npm run package:dir
+    npm.cmd run package:dir
 
     # 9. Clean/Create app_current directory
     $appCurrent = Join-Path $root "app_current"
