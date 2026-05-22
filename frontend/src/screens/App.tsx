@@ -57,7 +57,7 @@ export type AppState = {
 
 const DEFAULT_ASSISTANT_TEXT = "Команда выполнена.";
 
-function normalErrorMessage(error: unknown, fallback = "Backend недоступен"): string {
+function normalErrorMessage(error: unknown, fallback = "Backend недоступен. Проверьте, запущен ли python run_backend.py. Откройте /debug/startup или /health."): string {
   const raw =
     typeof error === "string"
       ? error
@@ -165,12 +165,18 @@ export function App() {
 
   const applyCommandResult = (userText: string, data: CommandResult) => {
     const assistantText = resultText(data);
-    const ttsUnavailable =
-      data.tts && !isTtsQueued(data) && data.tts.ok === false
-        ? `Команда выполнена, но Fish Audio не сработал: ${data.tts.error ?? "неизвестная ошибка"}`
-        : data.tts?.fallback_used
-          ? "Использован системный голос, Fish Audio недоступен."
-          : null;
+    const ttsProvider = data.tts?.provider ?? "none";
+    const ttsOk = data.tts?.ok !== false;
+    let ttsUnavailable: string | null = null;
+    
+    if (!ttsOk || ttsProvider === "text_only") {
+      const ttsErr = data.tts?.error || "Неизвестная ошибка";
+      const ttsFix = (data.tts as any)?.fix || (data.tts as any)?.details?.fix || "Проверьте настройки в .env.";
+      ttsUnavailable = `Голос недоступен (Provider: ${ttsProvider}). Ошибка: ${ttsErr}. Решение: ${ttsFix}`;
+    } else if (data.tts?.fallback_used) {
+      const ttsFix = (data.tts as any)?.fix || "Проверьте ключи Fish Audio в .env.";
+      ttsUnavailable = `Использован резервный голос (${ttsProvider}), основной недоступен. Решение: ${ttsFix}`;
+    }
     const historyItem: CommandHistoryItem = {
       id: data.command_id,
       userText,
@@ -296,7 +302,22 @@ export function App() {
     playSound("command_start");
     setState((current) => ({ ...current, assistantStatus: "working", statusText: "Выполняю", lastError: null }));
     const response = await api.say("Голосовой модуль работает, сэр.");
-    const assistantText = response.ok && response.data?.spoken ? "Голосовой модуль работает, сэр." : "Голосовой модуль недоступен, ответ показан текстом.";
+    const provider = response.data?.provider ?? "text_only";
+    const spoken = Boolean(response.data?.spoken);
+    const played = Boolean(response.data?.played);
+    
+    let assistantText = "Голосовой модуль работает, сэр.";
+    let errorMsg: string | null = null;
+    
+    if (response.ok && (spoken || played) && provider !== "text_only") {
+      assistantText = "Голосовой модуль работает, сэр.";
+    } else {
+      const err = response.data?.error || response.error?.message || "Неизвестная ошибка";
+      const fix = response.data?.fix || (response.error as any)?.details?.fix || "Проверьте настройки в .env.";
+      assistantText = "Голосовой модуль недоступен, ответ показан текстом.";
+      errorMsg = `Голос не воспроизведён. Provider: ${provider}. Причина: ${err}. Решение: ${fix}`;
+    }
+    
     setState((current) => ({
       ...current,
       assistantStatus: "ready",
@@ -307,14 +328,14 @@ export function App() {
           userText: "Проверить голос Джарвиса",
           assistantText,
           route: "voice:say",
-          status: response.ok ? "completed" : "text_only",
+          status: response.ok && provider !== "text_only" ? "completed" : "text_only",
           time: new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
         },
         ...current.history
       ].slice(0, 24),
-      lastError: response.ok && response.data?.audio_available === false ? "TTS недоступен, ответ показан текстом." : null
+      lastError: errorMsg
     }));
-    playSound(response.ok ? "success" : "error");
+    playSound(response.ok && provider !== "text_only" ? "success" : "error");
     await refreshStatus();
   };
 

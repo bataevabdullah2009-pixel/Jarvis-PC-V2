@@ -177,7 +177,7 @@ class AssistantOrchestrator:
         else:
             if local_matched:
                 mode = "local"
-            elif provider == "fallback" or route == "validation":
+            elif provider in {"fallback", "none"} or route == "validation" or str(router_result.get("route_detail", "")).startswith("ai_fallback:unavailable"):
                 mode = "ai_limited"
             else:
                 mode = "ai"

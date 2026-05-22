@@ -29,6 +29,9 @@ try {
     Write-Host "Running backend test suite (pytest)..." -ForegroundColor Yellow
     Set-Location "$root\backend"
     python -m pytest
+    if ($LASTEXITCODE -ne 0) {
+        throw "Backend tests failed (pytest returned non-zero exit code: $LASTEXITCODE). Please check test output."
+    }
     Write-Host "Backend tests passed successfully!" -ForegroundColor Green
 
     # 5. Build Frontend (npm install & npm run build)
@@ -43,6 +46,9 @@ try {
     cmd /c "tools\build_backend_exe.bat"
     if ($LASTEXITCODE -ne 0) {
         throw "Backend EXE compilation failed with code $LASTEXITCODE"
+    }
+    if (!(Test-Path "$root\dist\JarvisBackend.exe")) {
+        throw "Backend compiled binary was not found at $root\dist\JarvisBackend.exe! PyInstaller compilation might have failed silently."
     }
 
     # 7. Archive previous build directory if it exists
@@ -75,9 +81,15 @@ try {
     # 10. Copy fresh files to app_current
     Write-Host "Copying fresh release to $appCurrent..." -ForegroundColor Yellow
     if (!(Test-Path "$root\release\win-unpacked")) {
-        throw "Release build win-unpacked folder was not found at $root\release\win-unpacked!"
+        throw "Release build win-unpacked folder was not found at $root\release\win-unpacked! Ensure that npm run package:dir succeeded."
     }
     Copy-Item -Path "$root\release\win-unpacked\*" -Destination $appCurrent -Recurse -Force
+
+    # Assert copy validation
+    $launcherExe = Join-Path $appCurrent "JARVIS PC V2.exe"
+    if (!(Test-Path $launcherExe)) {
+        throw "Standalone launcher file copy validation failed: $launcherExe was not found after copying!"
+    }
 
     # 11. Write VERSION.txt and BUILD_INFO.json
     Write-Host "Writing version and build metadata files..." -ForegroundColor Yellow

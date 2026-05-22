@@ -239,19 +239,20 @@ export const WS_EVENTS_URL = API_BASE.replace(/^http/, "ws") + "/ws/events";
 function friendlyFetchMessage(path: string, error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   console.warn("[JARVIS_FETCH_ERROR]", path, raw);
+  const hint = "Backend недоступен. Проверьте, запущен ли python run_backend.py. Откройте /debug/startup или /health.";
   if (path.includes("/voice/say") || path.includes("/voice/tts-status")) {
-    return "TTS недоступен";
+    return "TTS недоступен. " + hint;
   }
   if (path.includes("/voice/")) {
-    return "Голосовой модуль недоступен";
+    return "Голосовой модуль недоступен. " + hint;
   }
   if (path.includes("/news/") || path.includes("/scenarios/news")) {
-    return "Новости недоступны";
+    return "Новости недоступны. " + hint;
   }
   if (path.includes("/assistant/command") || path.includes("/assistant/ask")) {
-    return "Backend недоступен";
+    return "Backend недоступен. " + hint;
   }
-  return "Backend недоступен";
+  return hint;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T>> {

@@ -1,3 +1,4 @@
 @echo off
-title JARVIS PC V2 - DEV LAUNCHER
-powershell -ExecutionPolicy Bypass -File "%~dp0tools\dev_run_fresh.ps1"
+cd /d "%~dp0"
+powershell -ExecutionPolicy Bypass -File "tools\dev_run_fresh.ps1" -Pull
+pause

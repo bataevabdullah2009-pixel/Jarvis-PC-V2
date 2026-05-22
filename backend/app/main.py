@@ -25,7 +25,6 @@ from app.voice.microphone import VoiceDependencyError
 from app.voice.tts import TTSService
 from app.voice.voice_pipeline import VoicePipeline, voice_error_response
 from app.core.assistant_orchestrator import AssistantOrchestrator
-import pygame
 
 
 configure_logging()
@@ -209,20 +208,69 @@ def voice_say(request: SayRequest) -> dict[str, Any]:
         "provider": result.get("provider", "text_only"),
         "spoken": bool(result.get("spoken", False)),
         "played": bool(result.get("played", False)),
-        "audio_available": bool(result.get("audio_available", False)),
         "fallback_used": bool(result.get("fallback_used", False)),
         "error": result.get("error"),
+        "fix": result.get("fix") or "Проверьте настройки голоса в .env.",
     }
     return {
         **summary,
         "data": summary,
-        "error": {"code": "TTS_ERROR", "message": str(result.get("error"))} if not result.get("ok", False) else None,
+        "error": {"code": "TTS_ERROR", "message": str(result.get("error")), "details": {"fix": result.get("fix")}} if not result.get("ok", False) else None,
     }
 
 
 @app.get("/debug/dependencies")
 def debug_dependencies() -> dict[str, Any]:
     return check_backend_dependencies()
+
+
+@app.get("/debug/startup")
+def debug_startup() -> dict[str, Any]:
+    import sys
+    import os
+
+    deps = [
+        "fastapi", "uvicorn", "pydantic", "pytest", "dotenv",
+        "httpx", "requests", "numpy", "sounddevice", "vosk",
+        "pyttsx3", "pygame", "anyio"
+    ]
+    missing = []
+
+    for dep in deps:
+        try:
+            if dep == "dotenv":
+                import dotenv
+            elif dep == "anyio":
+                import anyio
+            else:
+                __import__(dep)
+        except ImportError:
+            missing.append(dep)
+
+    audio_deps = {}
+    for dep in ["pyttsx3", "pygame", "sounddevice"]:
+        try:
+            __import__(dep)
+            audio_deps[dep] = True
+        except ImportError:
+            audio_deps[dep] = False
+
+    settings = get_settings()
+
+    return {
+        "backend_started": True,
+        "python_version": sys.version.split()[0],
+        "cwd": os.getcwd(),
+        "main_file": "app/main.py",
+        "requirements_ok": len(missing) == 0,
+        "missing_dependencies": missing,
+        "audio_dependencies": audio_deps,
+        "env": {
+            "openrouter_key_present": bool(settings.openrouter_api_key),
+            "fish_audio_key_present": bool(settings.fish_audio_api_key),
+            "fish_audio_voice_id_present": bool(settings.fish_audio_voice_id)
+        }
+    }
 
 
 @app.get("/debug/env-status")

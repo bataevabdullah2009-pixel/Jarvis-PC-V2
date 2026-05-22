@@ -44,8 +44,42 @@ $backendProc = Start-Process cmd -ArgumentList "/c title JARVIS Backend && pytho
 Write-Host "Launching Vite Frontend Dev Server..." -ForegroundColor Yellow
 $frontendProc = Start-Process cmd -ArgumentList "/c title JARVIS Frontend Dev && npm run dev" -WorkingDirectory "$root\frontend" -PassThru -WindowStyle Normal
 
-# 7. Wait briefly for servers to spin up
-Start-Sleep -Seconds 3
+# 7. Poll Backend health (max 20 seconds)
+Write-Host "Waiting for backend to become ready..." -ForegroundColor Yellow
+$backendReady = $false
+$maxRetries = 20
+for ($i = 1; $i -le $maxRetries; $i++) {
+    try {
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -TimeoutSec 1 -ErrorAction Stop
+        # Support both raw response and envelope response
+        if ($response.ok -eq $true -or $response.status -eq "ok" -or $response.data.status -eq "ok") {
+            $backendReady = $true
+            Write-Host "Backend is ready after $i seconds!" -ForegroundColor Green
+            break
+        }
+    }
+    catch {
+        # Silent retry
+    }
+    Write-Host "Polling backend health ($i/$maxRetries)..." -ForegroundColor Gray
+    Start-Sleep -Seconds 1
+}
+
+if (-not $backendReady) {
+    Write-Host "==================================================" -ForegroundColor Red
+    Write-Host "ERROR: Backend failed to respond within 20 seconds!" -ForegroundColor Red
+    Write-Host "Check backend logs or open http://127.0.0.1:8000/debug/startup" -ForegroundColor Red
+    Write-Host "==================================================" -ForegroundColor Red
+    
+    if ($backendProc) {
+        Stop-Process -Id $backendProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($frontendProc) {
+        Stop-Process -Id $frontendProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    & "$PSScriptRoot\kill_jarvis_processes.ps1"
+    throw "Backend startup timeout"
+}
 
 # 8. Show console addresses
 Write-Host ""

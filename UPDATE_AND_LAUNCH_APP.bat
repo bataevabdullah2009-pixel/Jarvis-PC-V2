@@ -1,3 +1,4 @@
 @echo off
-title JARVIS PC V2 - PRODUCTION UPDATER & LAUNCHER
-powershell -ExecutionPolicy Bypass -File "%~dp0tools\update_and_launch.ps1"
+cd /d "%~dp0"
+powershell -ExecutionPolicy Bypass -File "tools\update_and_launch.ps1"
+pause

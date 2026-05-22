@@ -9,7 +9,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 from typing import Any
 import winsound
-import pygame
 
 from app.core.config import LOG_DIR, Settings
 from app.providers.fish_audio import FishAudioTTS
@@ -44,6 +43,7 @@ def stop_all_audio() -> None:
     except Exception:
         pass
     try:
+        import pygame
         if pygame.mixer.get_init():
             pygame.mixer.music.stop()
             pygame.mixer.music.unload()
@@ -92,6 +92,7 @@ def play_audio_background(audio_bytes: bytes, audio_format: str) -> None:
 
             elif audio_format.lower() == "mp3":
                 try:
+                    import pygame
                     if not pygame.mixer.get_init():
                         pygame.mixer.init()
                 except Exception as e:
@@ -100,6 +101,7 @@ def play_audio_background(audio_bytes: bytes, audio_format: str) -> None:
 
                 temp_path = None
                 try:
+                    import pygame
                     temp_dir = tempfile.gettempdir()
                     temp_path = os.path.join(temp_dir, f"jarvis_speech_{int(time.time()*1000)}.mp3")
                     with open(temp_path, "wb") as f:
@@ -203,14 +205,26 @@ class SpeechOrchestrator:
         _LAST_TTS_ERROR = str(last_error)
         logger.warning("[SPEECH] Primary provider %s failed: %s", primary, last_error)
 
+        primary_fix = None
+        if primary == "fish_audio":
+            if not self.settings.fish_audio_api_key or not self.settings.fish_audio_voice_id:
+                primary_fix = "Основной голос Fish Audio недоступен: отсутствует JARVIS_FISH_AUDIO_API_KEY или JARVIS_FISH_AUDIO_VOICE_ID в .env."
+            else:
+                primary_fix = f"Основной голос Fish Audio недоступен. Ошибка: {last_error}. Проверьте лимиты/интернет."
+        else:
+            primary_fix = f"Основной голос {primary} недоступен. Ошибка: {last_error}."
+
         # If tts_require_fish_audio is True, we must NOT use any fallbacks other than text_only!
         if self.settings.tts_require_fish_audio:
             logger.info("[SPEECH] tts_require_fish_audio is True. Skipping non-Fish fallbacks.")
-            return self._text_only(safe_text, f"Primary voice {primary} failed and other voice providers are disallowed by tts_require_fish_audio", started)
+            return self._text_only(safe_text, f"Primary voice {primary} failed and other voice providers are disallowed by tts_require_fish_audio", started, primary_fix)
 
         if not self.settings.tts_fallback_enabled:
             logger.info("[SPEECH] Fallback disabled. Returning primary failure.")
-            return primary_result or self._text_only(safe_text, str(last_error), started)
+            res = primary_result or self._text_only(safe_text, str(last_error), started, primary_fix)
+            if "fix" not in res or not res["fix"]:
+                res["fix"] = primary_fix
+            return res
 
         # Fallback list priority order
         fallbacks = ["fish_audio", "resemble", "edge_tts", "pyttsx3"]
@@ -232,6 +246,7 @@ class SpeechOrchestrator:
                 fallback_result["fallback_used"] = True
                 fallback_result["warning"] = f"Использован резервный голос ({fallback}), так как основной {primary} недоступен."
                 fallback_result["latency_ms"] = int((time.perf_counter() - started) * 1000)
+                fallback_result["fix"] = primary_fix
                 logger.info("[SPEECH] Fallback provider %s succeeded in %sms", fallback, fallback_result["latency_ms"])
                 return fallback_result
 
@@ -241,7 +256,7 @@ class SpeechOrchestrator:
         # Pure text only fallback
         logger.error("[SPEECH] All TTS providers failed. Returning text-only fallback.")
         _LAST_PROVIDER_USED = "text_only"
-        return self._text_only(safe_text, "All TTS providers failed.", started)
+        return self._text_only(safe_text, "All TTS providers failed.", started, primary_fix)
 
     def _try_provider(self, provider: str, text: str, dry_run: bool) -> dict[str, Any] | None:
         logger = _speech_logger()
@@ -282,10 +297,11 @@ class SpeechOrchestrator:
 
         return None
 
-    def _text_only(self, text: str, error: str, started: float) -> dict[str, Any]:
+    def _text_only(self, text: str, error: str, started: float, fix: str | None = None) -> dict[str, Any]:
         result = _normalize(text_only_response(text), text, "text_only")
         result["error"] = error
         result["latency_ms"] = int((time.perf_counter() - started) * 1000)
+        result["fix"] = fix or "Все голосовые движки (Fish Audio, Edge TTS, pyttsx3) недоступны. Проверьте .env или установите pyttsx3 через pip."
         return result
 
     def say_greeting(self, text: str) -> dict[str, Any]:

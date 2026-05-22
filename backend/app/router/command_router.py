@@ -197,12 +197,16 @@ class CommandRouter:
                 ai_ms=ai_ms,
             )
 
+        fallback_ans = plan.answer_text or "Сэр, AI-мозг пока недоступен, но локальные команды работают."
+        if plan.status not in {"answered", "fallback"}:
+            fallback_ans = "Сэр, AI-мозг пока недоступен, но локальные команды работают."
+
         return self._finalize(
             command_id=command_id,
             route="ai_fallback",
-            route_detail="ai_fallback",
+            route_detail="ai_fallback:unavailable" if plan.status not in {"answered", "fallback"} else "ai_fallback",
             provider=plan.provider,
-            response_text=plan.answer_text,
+            response_text=fallback_ans,
             actions=[],
             requires_confirmation=False,
             forbidden=False,
@@ -211,7 +215,7 @@ class CommandRouter:
                 "error": {
                     "type": plan.error_type or plan.error or "unknown",
                     "message": plan.error_message or plan.error or "unknown",
-                    "fix": plan.fix,
+                    "fix": plan.fix or "Проверьте подключение к интернету или API-ключ OpenRouter в .env.",
                 },
                 "plan": plan.to_dict(),
             },
