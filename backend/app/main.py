@@ -117,6 +117,10 @@ def envelope(data: Any, *, ok: bool = True, error: dict[str, Any] | None = None)
 
 
 def command_envelope(result: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(result.get("tts"), dict) and "audio" in result["tts"]:
+        result = dict(result)
+        result["tts"] = dict(result["tts"])
+        result["tts"]["audio"] = None
     ok = bool(result.get("ok", True))
     if result.get("mode") in {"ai_limited", "local", "text_only"}:
         ok = True

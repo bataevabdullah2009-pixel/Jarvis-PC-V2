@@ -38,6 +38,30 @@ def main():
             rel_path = os.path.relpath(file_path, root_dir)
             ext = os.path.splitext(file)[1].lower()
 
+            target_lf_exts = {".py", ".ts", ".tsx", ".js", ".json", ".md", ".css", ".html"}
+            target_crlf_exts = {".ps1", ".bat"}
+
+            # Byte-level line endings verification
+            if ext in target_lf_exts or ext in target_crlf_exts:
+                try:
+                    with open(file_path, "rb") as f:
+                        content = f.read()
+                    
+                    lf_count = content.count(b"\n")
+                    cr_count = content.count(b"\r")
+                    crlf_count = content.count(b"\r\n")
+
+                    # CR-only line endings check (isolated \r)
+                    has_isolated_cr = b"\r" in content.replace(b"\r\n", b"")
+
+                    if lf_count == 0:
+                        errors.append(f"Format: {rel_path} has LF count == 0")
+                    
+                    if has_isolated_cr:
+                        errors.append(f"Format: {rel_path} CR-only line endings detected")
+                except Exception as e:
+                    errors.append(f"Format: {rel_path} failed line endings check: {e}")
+
             # Python files compile check
             if ext == ".py":
                 try:
