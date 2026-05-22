@@ -290,6 +290,122 @@ def debug_test_openrouter(request: ProviderTextRequest) -> dict[str, Any]:
     return OpenRouterPlanner(get_settings()).test(text, must_contain=required)
 
 
+@app.post("/debug/test-ai-brain")
+async def debug_test_ai_brain() -> dict[str, Any]:
+    settings = get_settings()
+    steps = []
+    fixes = []
+
+    # 1. Environment Status Step
+    started_env = time.perf_counter()
+    env_status = env_debug_status(settings)
+    env_fixes = env_status.get("fixes", [])
+    fixes.extend(env_fixes)
+    steps.append({
+        "name": "env_check",
+        "ok": len(env_fixes) == 0,
+        "message": "Environment settings checked." if len(env_fixes) == 0 else "Missing environment settings.",
+        "details": env_status,
+        "latency_ms": int((time.perf_counter() - started_env) * 1000)
+    })
+
+    # 2. OpenRouter Test Step
+    started_or = time.perf_counter()
+    if settings.openrouter_api_key:
+        try:
+            or_test = OpenRouterPlanner(settings).test("Скажи строго эту фразу: ГРОЗНЫЙ-777", must_contain="ГРОЗНЫЙ-777")
+            or_ok = bool(or_test.get("ok"))
+            or_msg = "OpenRouter connection test passed." if or_ok else f"OpenRouter connection test failed: {or_test.get('error_message')}"
+            if or_test.get("fix"):
+                fixes.append(or_test["fix"])
+        except Exception as e:
+            or_test = {"ok": False, "error_message": str(e), "error_type": "exception"}
+            or_ok = False
+            or_msg = f"OpenRouter exception during test: {str(e)}"
+            fixes.append("Проверьте интернет-соединение или настройки прокси.")
+    else:
+        or_test = {"ok": False, "error_type": "key_missing", "error_message": "OpenRouter API key is missing."}
+        or_ok = False
+        or_msg = "OpenRouter test skipped: API key is missing."
+
+    steps.append({
+        "name": "openrouter_test",
+        "ok": or_ok,
+        "message": or_msg,
+        "details": or_test,
+        "latency_ms": int((time.perf_counter() - started_or) * 1000)
+    })
+
+    # 3. Assistant Routing Step
+    started_ask = time.perf_counter()
+    orchestrator = AssistantOrchestrator(settings)
+    try:
+        ask_res = await orchestrator.ask(
+            text="Как тебя зовут?",
+            speak=True,
+            source="diagnostic",
+            context={"dry_run": True}
+        )
+        ask_ok = bool(ask_res.get("ok"))
+        ask_msg = "Assistant ask query completed." if ask_ok else f"Assistant ask query failed: {ask_res.get('text')}"
+        if ask_res.get("error") and isinstance(ask_res["error"], dict) and ask_res["error"].get("fix"):
+            fixes.append(ask_res["error"]["fix"])
+    except Exception as e:
+        ask_res = {"ok": False, "error": str(e)}
+        ask_ok = False
+        ask_msg = f"Assistant ask query raised exception: {str(e)}"
+        fixes.append("Check assistant orchestrator logs for crashes.")
+
+    steps.append({
+        "name": "assistant_ask",
+        "ok": ask_ok,
+        "message": ask_msg,
+        "details": ask_res,
+        "latency_ms": int((time.perf_counter() - started_ask) * 1000)
+    })
+
+    # 4. TTS Step
+    started_tts = time.perf_counter()
+    try:
+        tts = TTSService(settings)
+        tts_res = tts.speak("Тест.", dry_run=True)
+        tts_ok = bool(tts_res.get("ok"))
+        tts_msg = "TTS synthesis test passed." if tts_ok else f"TTS synthesis test failed: {tts_res.get('error')}"
+        if tts_res.get("fix"):
+            fixes.append(tts_res["fix"])
+    except Exception as e:
+        tts_res = {"ok": False, "error": str(e)}
+        tts_ok = False
+        tts_msg = f"TTS test raised exception: {str(e)}"
+        fixes.append("Check TTS service settings.")
+
+    steps.append({
+        "name": "tts_test",
+        "ok": tts_ok,
+        "message": tts_msg,
+        "details": tts_res,
+        "latency_ms": int((time.perf_counter() - started_tts) * 1000)
+    })
+
+    # Deduplicate fixes keeping original order
+    seen_fixes = set()
+    deduped_fixes = []
+    for f in fixes:
+        if f and f not in seen_fixes:
+            seen_fixes.add(f)
+            deduped_fixes.append(f)
+
+    final_ok = all(s["ok"] for s in steps)
+
+    return {
+        "ok": final_ok,
+        "steps": steps,
+        "final_text": ask_res.get("text") if isinstance(ask_res, dict) else None,
+        "spoken": ask_res.get("spoken") if isinstance(ask_res, dict) else False,
+        "fixes": deduped_fixes
+    }
+
+
 @app.post("/debug/test-fish-audio")
 def debug_test_fish_audio(request: ProviderTextRequest) -> dict[str, Any]:
     settings = get_settings()

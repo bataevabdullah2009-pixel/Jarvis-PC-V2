@@ -324,3 +324,169 @@ def test_existing_endpoints_still_work() -> None:
     assert resp4.status_code == 200
     assert resp4.json()["ok"] is True
 
+
+def test_env_status_openrouter_fields() -> None:
+    response = client.get("/debug/env-status")
+    assert response.status_code == 200
+    body = response.json()
+    assert "env_loaded" in body
+    assert "paths_checked" in body
+    assert "paths_loaded" in body
+    assert "openrouter" in body
+    assert "key_present" in body["openrouter"]
+    assert "key_prefix" in body["openrouter"]
+    assert "model" in body["openrouter"]
+    assert "model_present" in body["openrouter"]
+    assert "fixes" in body
+
+
+def test_openrouter_no_key(monkeypatch) -> None:
+    from app.core.config import Settings
+    from app.providers.openrouter import OpenRouterPlanner
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = None
+    monkeypatch.setattr("app.providers.openrouter.Settings", lambda: settings_inst)
+
+    planner = OpenRouterPlanner(settings_inst)
+    res = planner.test("Привет")
+    assert res["ok"] is False
+    assert res["called"] is False
+    assert res["error_type"] == "key_missing"
+    assert "API key is missing" in res["error_message"]
+    assert "fix" in res
+
+
+def test_openrouter_mock_success(monkeypatch) -> None:
+    import httpx
+    from app.core.config import Settings
+    from app.providers.openrouter import OpenRouterPlanner
+
+    class MockResponse:
+        status_code = 200
+        text = '{"choices": [{"message": {"content": "ГРОЗНЫЙ-777"}}]}'
+        def json(self):
+            return {"choices": [{"message": {"content": "ГРОЗНЫЙ-777"}}]}
+
+    def mock_post(self, url, **kwargs):
+        return MockResponse()
+
+    monkeypatch.setattr(httpx.Client, "post", mock_post)
+
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = "fake_key_123456789012"
+    settings_inst.openrouter_model = "openai/gpt-4o-mini"
+
+    planner = OpenRouterPlanner(settings_inst)
+    res = planner.test("Скажи строго эту фразу: ГРОЗНЫЙ-777")
+    assert res["ok"] is True
+    assert res["called"] is True
+    assert res["status_code"] == 200
+    assert "ГРОЗНЫЙ-777" in res["response_preview"]
+
+
+def test_openrouter_mock_401(monkeypatch) -> None:
+    import httpx
+    from app.core.config import Settings
+    from app.providers.openrouter import OpenRouterPlanner
+
+    class MockResponse:
+        status_code = 401
+        reason_phrase = "Unauthorized"
+        text = '{"error": {"message": "Invalid API Key", "code": 401}}'
+        def json(self):
+            return {"error": {"message": "Invalid API Key", "code": 401}}
+
+    def mock_post(self, url, **kwargs):
+        return MockResponse()
+
+    monkeypatch.setattr(httpx.Client, "post", mock_post)
+
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = "fake_key_123456789012"
+    settings_inst.openrouter_model = "openai/gpt-4o-mini"
+
+    planner = OpenRouterPlanner(settings_inst)
+    res = planner.test("Привет")
+    assert res["ok"] is False
+    assert res["called"] is True
+    assert res["status_code"] == 401
+    assert res["error_type"] == "invalid_key"
+    assert "invalid API key" in res["error_message"]
+    assert "Неверный OpenRouter API ключ" in res["fix"]
+
+
+def test_assistant_ask_calls_openrouter_when_key_present(monkeypatch) -> None:
+    from app.core.config import Settings
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = "fake_key_123456789012"
+    monkeypatch.setattr("app.main.get_settings", lambda: settings_inst)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings_inst)
+
+    def fake_plan(self, text: str) -> PlannerResult:
+        return PlannerResult(
+            status="answered",
+            answer_text="Я Джарвис, сэр.",
+            actions=[],
+            provider="openrouter",
+            model="openai/gpt-4o-mini",
+            openrouter_called=True,
+            status_code=200,
+            latency_ms=100
+        )
+    monkeypatch.setattr(AIPlanner, "plan", fake_plan)
+
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Кто ты?",
+            "speak": False,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["mode"] == "ai"
+    assert data["openrouter_called"] is True
+    assert "Я Джарвис" in data["response_text"]
+
+
+def test_assistant_ask_local_command_does_not_call_openrouter(monkeypatch) -> None:
+    from app.core.config import Settings
+    settings_inst = Settings.load()
+    settings_inst.openrouter_api_key = "fake_key_123456789012"
+    monkeypatch.setattr("app.main.get_settings", lambda: settings_inst)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings_inst)
+
+    openrouter_called_flag = False
+    def fake_plan(self, text: str) -> PlannerResult:
+        nonlocal openrouter_called_flag
+        openrouter_called_flag = True
+        return PlannerResult(
+            status="answered",
+            answer_text="AI reply",
+            actions=[],
+            provider="openrouter",
+            openrouter_called=True
+        )
+    monkeypatch.setattr(AIPlanner, "plan", fake_plan)
+
+    response = client.post(
+        "/assistant/ask",
+        json={
+            "text": "Джарвис, я вернулся",
+            "speak": False,
+            "source": "hud",
+            "context": {"dry_run": True},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["mode"] == "local"
+    assert data["openrouter_called"] is False
+    assert openrouter_called_flag is False
+

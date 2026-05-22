@@ -119,8 +119,73 @@ export function MinimalUI({
     await onCommand(text);
   };
 
+  const openrouterStatus = useMemo(() => {
+    if (state.lastResult) {
+      const called = state.lastResult.openrouter_called;
+      const plan = state.lastResult.plan;
+      const errorObj = state.lastResult.error;
+      const errorType = errorObj?.type || plan?.error_type || state.lastResult.error_type;
+      const statusCode = state.lastResult.status_code || plan?.status_code || errorObj?.status_code;
+
+      if (called) {
+        if (errorType === "rate_limited" || statusCode === 429) {
+          return "rate limited";
+        }
+        if (errorType === "timeout") {
+          return "timeout";
+        }
+        if (statusCode === 200 || (!errorType && !statusCode && state.lastResult.ok)) {
+          return "called / 200 OK";
+        }
+        if (statusCode === 401 || errorType === "invalid_key") {
+          return "called / 401 invalid key";
+        }
+        if (statusCode === 402 || errorType === "no_credits_or_payment_required") {
+          return "called / 402 no credits";
+        }
+        if (statusCode === 403 || errorType === "forbidden") {
+          return "called / 403 forbidden";
+        }
+        if (statusCode === 404 || errorType === "model_not_found") {
+          return "called / 404 model not found";
+        }
+        if (statusCode) {
+          return `called / ${statusCode} error`;
+        }
+        return "called / error";
+      } else {
+        if (errorType === "key_missing" || state.lastResult.route_detail === "ai_fallback:missing_key") {
+          return "key missing";
+        }
+        if (errorType === "model_missing") {
+          return "model missing";
+        }
+      }
+    }
+
+    if (state.debugEnv?.openrouter) {
+      if (!state.debugEnv.openrouter.key_present) {
+        return "key missing";
+      }
+      if (!state.debugEnv.openrouter.model_present) {
+        return "model missing";
+      }
+    } else if (state.settings) {
+      if (!state.settings.openrouter_configured) {
+        return "key missing";
+      }
+    }
+
+    return "not called";
+  }, [state.lastResult, state.debugEnv, state.settings]);
+
+  const diagnosticFix = useMemo(() => {
+    if (!state.lastResult) return null;
+    return state.lastResult.error?.fix || state.lastResult.plan?.fix || state.lastResult.fix || null;
+  }, [state.lastResult]);
+
   const routeSummary = state.lastResult
-    ? `${state.lastResult.route} | OpenRouter: ${state.lastResult.openrouter_called ? "called" : "not called"} | TTS: ${state.lastResult.tts?.provider ?? "none"}${state.lastResult.tts?.status ? `/${state.lastResult.tts.status}` : ""} | ${state.lastResult.latency?.total_ms ?? 0} ms`
+    ? `${state.lastResult.route} | OpenRouter: ${openrouterStatus} | TTS: ${state.lastResult.tts?.provider ?? "none"}${state.lastResult.tts?.status ? `/${state.lastResult.tts.status}` : ""} | ${state.lastResult.latency?.total_ms ?? 0} ms`
     : "ожидание";
 
   return (
@@ -265,6 +330,12 @@ export function MinimalUI({
             <span>Статус</span>
             <strong>{state.statusText}</strong>
           </div>
+          {diagnosticFix && (
+            <div style={{ color: "#FF5E5E" }}>
+              <span>Решение</span>
+              <strong title={diagnosticFix}>{diagnosticFix}</strong>
+            </div>
+          )}
         </footer>
       </section>
     </main>

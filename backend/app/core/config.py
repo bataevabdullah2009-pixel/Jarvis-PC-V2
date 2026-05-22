@@ -106,15 +106,20 @@ def load_environment() -> None:
     global ENV_PATHS_CHECKED, ENV_PATHS_LOADED
 
     with ENV_LOCK:
-        paths: list[Path] = [
+        base_paths: list[Path] = [
             PROJECT_ROOT / ".env",
-            PROJECT_ROOT / "backend" / ".env",
             Path.cwd() / ".env",
         ]
         for root in _candidate_project_roots():
-            paths.extend([root / ".env", root / "backend" / ".env"])
+            base_paths.append(root / ".env")
 
-        ENV_PATHS_CHECKED = _dedupe_paths(paths)
+        backend_paths: list[Path] = [
+            PROJECT_ROOT / "backend" / ".env",
+        ]
+        for root in _candidate_project_roots():
+            backend_paths.append(root / "backend" / ".env")
+
+        ENV_PATHS_CHECKED = _dedupe_paths(base_paths) + _dedupe_paths(backend_paths)
         ENV_PATHS_LOADED = []
         ENV_LOAD_ERRORS.clear()
         for path in ENV_PATHS_CHECKED:
@@ -141,10 +146,22 @@ def env_debug_status(settings: "Settings") -> dict[str, Any]:
     def prefix(value: str | None, length: int = 12) -> str | None:
         if not value:
             return None
+        if len(value) <= length:
+            return value
         return value[:length] + "..."
 
     checked = [str(path) for path in _dedupe_paths(ENV_PATHS_CHECKED)]
     loaded = [str(path) for path in _dedupe_paths(ENV_PATHS_LOADED)]
+
+    fixes = []
+    if not settings.openrouter_api_key:
+        fixes.append("Добавьте JARVIS_OPENROUTER_API_KEY в C:\\Jarvis PC V2\\backend\\.env")
+    if not settings.openrouter_model:
+        fixes.append("Добавьте JARVIS_OPENROUTER_MODEL в C:\\Jarvis PC V2\\backend\\.env")
+    if not settings.fish_audio_api_key:
+        fixes.append("Добавьте JARVIS_FISH_AUDIO_API_KEY в C:\\Jarvis PC V2\\backend\\.env")
+    if not settings.fish_audio_voice_id:
+        fixes.append("Добавьте JARVIS_FISH_AUDIO_VOICE_ID в C:\\Jarvis PC V2\\backend\\.env")
 
     return {
         "env_loaded": bool(ENV_PATHS_LOADED),
@@ -155,8 +172,9 @@ def env_debug_status(settings: "Settings") -> dict[str, Any]:
         "env_errors": ENV_LOAD_ERRORS,
         "openrouter": {
             "key_present": bool(settings.openrouter_api_key),
-            "key_prefix": prefix(settings.openrouter_api_key),
+            "key_prefix": prefix(settings.openrouter_api_key, 12),
             "model": settings.openrouter_model,
+            "model_present": bool(settings.openrouter_model),
             "missing_variable": None if settings.openrouter_api_key else "JARVIS_OPENROUTER_API_KEY or OPENROUTER_API_KEY",
         },
         "fish_audio": {
@@ -174,6 +192,7 @@ def env_debug_status(settings: "Settings") -> dict[str, Any]:
             "require_fish_audio": settings.tts_require_fish_audio,
             "timeout_seconds": settings.tts_timeout_seconds,
         },
+        "fixes": fixes,
     }
 
 

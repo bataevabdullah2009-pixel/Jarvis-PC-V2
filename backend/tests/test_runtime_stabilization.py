@@ -108,7 +108,7 @@ def test_assistant_ask_no_crash(monkeypatch) -> None:
     body = response.json()
     assert body["ok"] is True  # Controlled fallback should return ok: True
     data = body["data"]
-    assert data["mode"] == "ai_limited"
+    assert data["mode"] == "ai_error"
     assert "недоступен" in data["text"]
 
 

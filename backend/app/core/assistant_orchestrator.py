@@ -152,9 +152,13 @@ class AssistantOrchestrator:
         route = router_result.get("route")
         provider = router_result.get("provider", "none")
         
+        plan_data = router_result.get("plan", {})
+        plan_status = plan_data.get("status") if isinstance(plan_data, dict) else None
+        is_ai_error = (plan_status == "ai_error") or (router_result.get("route_detail") == "ai_fallback:unavailable" and has_openrouter_key)
+
         # Explicitly check for controlled fallback when key is missing and no local match occurred
         if not has_openrouter_key and not local_matched:
-            fallback_text = "Сэр, AI-мозг пока не подключён: отсутствует OpenRouter API key. Локальные команды доступны."
+            fallback_text = "Сэр, AI-мозг пока не подключён: отсутствует OpenRouter API key. Локальные команды работают."
             router_result["text"] = fallback_text
             router_result["response_text"] = fallback_text
             router_result["provider"] = "none"
@@ -177,6 +181,25 @@ class AssistantOrchestrator:
         else:
             if local_matched:
                 mode = "local"
+            elif is_ai_error:
+                mode = "ai_error"
+                # Enrich error structure
+                err_type = plan_data.get("error_type") or plan_data.get("error") or "provider_error"
+                err_msg = plan_data.get("error_message") or plan_data.get("error") or "OpenRouter error occurred"
+                err_fix = plan_data.get("fix") or "Проверьте подключение к интернету или API-ключ OpenRouter в .env."
+                
+                router_result["error"] = {
+                    "code": "AI_ERROR",
+                    "type": err_type,
+                    "message": err_msg,
+                    "fix": err_fix
+                }
+                router_result["openrouter_called"] = True
+                
+                # Make sure the text is correct human error text
+                human_err_text = plan_data.get("answer_text") or router_result.get("text")
+                router_result["text"] = human_err_text
+                router_result["response_text"] = human_err_text
             elif provider in {"fallback", "none"} or route == "validation" or str(router_result.get("route_detail", "")).startswith("ai_fallback:unavailable"):
                 mode = "ai_limited"
             else:

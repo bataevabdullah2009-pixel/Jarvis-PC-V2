@@ -199,12 +199,23 @@ class CommandRouter:
 
         fallback_ans = plan.answer_text or "Сэр, AI-мозг пока недоступен, но локальные команды работают."
         if plan.status not in {"answered", "fallback"}:
-            fallback_ans = "Сэр, AI-мозг пока недоступен, но локальные команды работают."
+            if plan.status in {"ai_limited", "ai_error"}:
+                fallback_ans = plan.answer_text
+            else:
+                fallback_ans = "Сэр, AI-мозг пока недоступен, но локальные команды работают."
+
+        route_detail = "ai_fallback"
+        if plan.status == "ai_error":
+            route_detail = "ai_fallback:unavailable"
+        elif plan.status == "ai_limited":
+            route_detail = "ai_fallback:missing_key"
+        elif plan.status not in {"answered", "fallback"}:
+            route_detail = "ai_fallback:unavailable"
 
         return self._finalize(
             command_id=command_id,
             route="ai_fallback",
-            route_detail="ai_fallback:unavailable" if plan.status not in {"answered", "fallback"} else "ai_fallback",
+            route_detail=route_detail,
             provider=plan.provider,
             response_text=fallback_ans,
             actions=[],

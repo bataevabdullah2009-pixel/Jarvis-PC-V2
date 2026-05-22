@@ -46,18 +46,24 @@ def _provider_logger(name: str, filename: str) -> logging.Logger:
 
 
 def _fix_for(status_code: int | None, error_type: str) -> str:
-    if error_type == "env_missing":
-        return "Backend did not load .env or OpenRouter key is missing."
+    if error_type in {"key_missing", "env_missing"}:
+        return "Добавьте JARVIS_OPENROUTER_API_KEY в backend/.env или .env файл."
+    if error_type == "model_missing":
+        return "Добавьте JARVIS_OPENROUTER_MODEL в backend/.env или .env файл."
     if error_type == "offline_mode":
         return "Disable offline_mode in backend settings."
-    if status_code == 401:
-        return "OpenRouter 401: invalid or revoked API key."
-    if status_code == 403:
-        return "OpenRouter 403: check key permissions and balance."
-    if status_code == 404:
-        return "OpenRouter 404: model not found, check JARVIS_OPENROUTER_MODEL."
-    if status_code == 429:
-        return "OpenRouter 429: rate limit or quota exceeded."
+    if error_type == "invalid_key" or status_code == 401:
+        return "Неверный OpenRouter API ключ. Пожалуйста, проверьте правильность ключа в backend/.env."
+    if error_type == "no_credits_or_payment_required" or status_code == 402:
+        return "Недостаточно средств на балансе OpenRouter. Пополните баланс на openrouter.ai."
+    if error_type == "forbidden" or status_code == 403:
+        return "Доступ к ресурсу запрещен. Проверьте настройки прав ключа OpenRouter."
+    if error_type == "model_not_found" or status_code == 404:
+        return "Модель не найдена на OpenRouter. Проверьте правильность JARVIS_OPENROUTER_MODEL."
+    if error_type == "rate_limited" or status_code == 429:
+        return "Превышен лимит запросов. Подождите немного и повторите попытку."
+    if error_type == "timeout":
+        return "Таймаут соединения с OpenRouter. Проверьте интернет-соединение или прокси."
     if status_code and status_code >= 500:
         return "OpenRouter server error, retry later."
     if error_type in {"ConnectTimeout", "ReadTimeout", "TimeoutException"}:
@@ -68,18 +74,24 @@ def _fix_for(status_code: int | None, error_type: str) -> str:
 
 
 def _error_message(status_code: int | None, error_type: str, raw_message: str, model: str) -> str:
-    if error_type == "env_missing":
-        return "OpenRouter key is missing."
+    if error_type in {"key_missing", "env_missing"}:
+        return "OpenRouter API key is missing."
+    if error_type == "model_missing":
+        return "OpenRouter model is missing."
     if error_type == "offline_mode":
         return "AI is disabled: offline_mode is enabled."
-    if status_code == 401:
+    if error_type == "invalid_key" or status_code == 401:
         return "OpenRouter 401: invalid API key."
-    if status_code == 403:
+    if error_type == "no_credits_or_payment_required" or status_code == 402:
+        return "OpenRouter 402: payment required or no credits."
+    if error_type == "forbidden" or status_code == 403:
         return f"OpenRouter 403: {raw_message or 'access denied'}"
-    if status_code == 404:
+    if error_type == "model_not_found" or status_code == 404:
         return f"OpenRouter 404: model not found: {model}."
-    if status_code == 429:
+    if error_type == "rate_limited" or status_code == 429:
         return "OpenRouter 429: rate limit or quota exceeded."
+    if error_type == "timeout":
+        return f"OpenRouter request timeout: {raw_message or 'read/connect timeout'}"
     if error_type in {"ConnectTimeout", "ReadTimeout", "TimeoutException"}:
         return f"OpenRouter timeout during SSL/network request: {raw_message}"
     if raw_message:
@@ -106,12 +118,23 @@ class PlannerResult:
     raw_response_preview: str | None = None
     response_text_preview: str | None = None
 
+    @property
+    def called(self) -> bool:
+        return self.openrouter_called
+
+    @property
+    def text(self) -> str:
+        return self.answer_text
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
             "answer_text": self.answer_text,
+            "text": self.answer_text,
             "actions": self.actions,
             "provider": self.provider,
+            "called": self.openrouter_called,
+            "ok": self.status == "answered",
             "error": self.error,
             "model": self.model,
             "status_code": self.status_code,
@@ -147,8 +170,13 @@ class OpenRouterPlanner:
             ai_logger.info("[AI] error=%s", result.error_message)
             return result
         if not self.settings.openrouter_api_key:
-            result = self._unavailable("env_missing", None, "openrouter_api_key_missing")
+            result = self._unavailable("key_missing", None, "openrouter_api_key_missing")
             openrouter_logger.info("[OPENROUTER] called=false reason=missing_key")
+            ai_logger.info("[AI] error=%s", result.error_message)
+            return result
+        if not self.settings.openrouter_model:
+            result = self._unavailable("model_missing", None, "openrouter_model_missing")
+            openrouter_logger.info("[OPENROUTER] called=false reason=missing_model")
             ai_logger.info("[AI] error=%s", result.error_message)
             return result
 
@@ -158,14 +186,14 @@ class OpenRouterPlanner:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": text},
             ],
-            "temperature": 0.4,
-            "max_tokens": 600,
+            "temperature": 0.6,
+            "max_tokens": 500,
         }
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost/jarvis-pc-v2",
-            "X-Title": "JARVIS PC V2",
+            "HTTP-Referer": "http://127.0.0.1:5173",
+            "X-OpenRouter-Title": "Jarvis PC V2",
         }
 
         started = time.perf_counter()
@@ -209,8 +237,22 @@ class OpenRouterPlanner:
                 if status_code >= 400:
                     raw_message = self._extract_error_message(response.text) or response.reason_phrase
                     latency_ms = int((time.perf_counter() - started) * 1000)
+                    
+                    if status_code == 401:
+                        err_type = "invalid_key"
+                    elif status_code == 402:
+                        err_type = "no_credits_or_payment_required"
+                    elif status_code == 403:
+                        err_type = "forbidden"
+                    elif status_code == 404:
+                        err_type = "model_not_found"
+                    elif status_code == 429:
+                        err_type = "rate_limited"
+                    else:
+                        err_type = "provider_error"
+
                     result = self._unavailable(
-                        "HTTPStatusError",
+                        err_type,
                         status_code,
                         raw_message,
                         latency_ms=latency_ms,
@@ -225,7 +267,7 @@ class OpenRouterPlanner:
             except json.JSONDecodeError as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 result = self._unavailable(
-                    "JSONDecodeError",
+                    "provider_error",
                     status_code,
                     str(exc),
                     latency_ms=latency_ms,
@@ -251,8 +293,9 @@ class OpenRouterPlanner:
         if data is None:
             latency_ms = int((time.perf_counter() - started) * 1000)
             exc = last_error or RuntimeError("unknown_openrouter_error")
+            err_type = "timeout" if isinstance(exc, httpx.TimeoutException) else "provider_error"
             result = self._unavailable(
-                exc.__class__.__name__,
+                err_type,
                 None,
                 str(exc) or exc.__class__.__name__,
                 latency_ms=latency_ms,
@@ -268,7 +311,7 @@ class OpenRouterPlanner:
         if not answer:
             latency_ms = int((time.perf_counter() - started) * 1000)
             result = self._unavailable(
-                "openrouter_empty_response",
+                "provider_error",
                 status_code,
                 "OpenRouter returned empty choices[0].message.content.",
                 latency_ms=latency_ms,
@@ -321,45 +364,39 @@ class OpenRouterPlanner:
             return {
                 "ok": True,
                 "provider": "openrouter",
-                "endpoint": self.endpoint,
+                "called": True,
                 "model": self.settings.openrouter_model,
-                "openrouter_called": result.openrouter_called,
                 "status_code": result.status_code,
-                "response_text": result.answer_text,
-                "raw_response_preview": result.raw_response_preview,
-                "latency_ms": latency_ms,
-                "retry_count": result.retry_count,
                 "response_preview": result.answer_text[:160],
+                "error_type": None,
+                "error_message": None,
+                "fix": None,
+                "latency_ms": latency_ms,
             }
         if result.status == "answered" and not contains_required:
             return {
                 "ok": False,
                 "provider": "openrouter",
-                "endpoint": self.endpoint,
+                "called": True,
                 "model": self.settings.openrouter_model,
-                "openrouter_called": result.openrouter_called,
                 "status_code": result.status_code,
-                "response_text": result.answer_text,
-                "raw_response_preview": result.raw_response_preview,
-                "latency_ms": latency_ms,
-                "retry_count": result.retry_count,
-                "error_type": "required_text_missing",
+                "response_preview": result.answer_text[:160] if result.answer_text else None,
+                "error_type": "provider_error",
                 "error_message": f"OpenRouter response did not contain required text: {must_contain}",
+                "fix": "Check model instructions or try a different query.",
+                "latency_ms": latency_ms,
             }
         return {
             "ok": False,
             "provider": "openrouter",
-            "endpoint": self.endpoint,
+            "called": result.openrouter_called,
             "model": self.settings.openrouter_model,
-            "openrouter_called": result.openrouter_called,
             "status_code": result.status_code,
-            "response_text": result.answer_text,
-            "raw_response_preview": result.raw_response_preview,
-            "latency_ms": latency_ms,
-            "retry_count": result.retry_count,
+            "response_preview": result.answer_text[:160] if result.answer_text else None,
             "error_type": result.error_type or result.error or "unknown",
             "error_message": result.error_message or result.error or "unknown",
             "fix": result.fix or _fix_for(result.status_code, result.error_type or "unknown"),
+            "latency_ms": latency_ms,
         }
 
     def _unavailable(
