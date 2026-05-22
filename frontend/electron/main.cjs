@@ -121,6 +121,7 @@ function startBackend() {
           JARVIS_BACKEND_PORT: BACKEND_PORT,
           JARVIS_BACKEND_HOST: "127.0.0.1",
           JARVIS_PROJECT_ROOT: isDev ? projectRoot() : process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath),
+          JARVIS_FRONTEND_MODE: isDev ? "dev" : "packaged",
           LICENSE_ENABLED: "false"
         },
         windowsHide: true,

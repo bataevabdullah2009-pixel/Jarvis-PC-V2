@@ -157,6 +157,10 @@ export function MinimalUI({
             );
           })}
         </nav>
+        <div className="sidebar-footer">
+          <div className="build-label">Build: {state.buildInfo?.git_sha ?? "dev"}</div>
+          <div className="build-date">{state.buildInfo?.built_at?.split(' ')[0] ?? ""}</div>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -685,6 +689,21 @@ function SettingsPanel({
         <InfoCard label="Лицензия" value="Отключена" />
         <InfoCard label="OpenRouter" value={state.settings?.openrouter_configured ? "configured" : "missing"} />
         <InfoCard label="Fish Audio" value={state.settings?.fish_audio_configured ? "configured" : "missing"} />
+      </div>
+      <div className="settings-section" style={{ marginTop: '16px', background: 'rgba(8, 13, 22, 0.4)' }}>
+        <div className="panel-heading no-margin">
+          <Activity size={18} />
+          <h3>Информация о сборке</h3>
+        </div>
+        <div className="settings-list" style={{ marginTop: '12px', marginBottom: 0 }}>
+          <InfoCard label="Git Commit SHA" value={state.buildInfo?.git_sha ?? "unknown"} />
+          <InfoCard label="Git Ветка" value={state.buildInfo?.git_branch ?? "unknown"} />
+          <InfoCard label="Дата сборки" value={state.buildInfo?.built_at ?? "unknown"} />
+          <InfoCard label="Режим Frontend" value={state.buildInfo?.frontend_mode ?? "unknown"} />
+          <InfoCard label="Из исходников" value={state.buildInfo?.running_from_source ? "Да" : "Нет"} />
+          <InfoCard label="Упакован (Packaged)" value={state.buildInfo?.packaged ? "Да" : "Нет"} />
+          <InfoCard label="API URL" value={import.meta.env.VITE_JARVIS_API_BASE ?? "http://127.0.0.1:8000"} />
+        </div>
       </div>
       <ToggleRow label="Debug details" checked={Boolean(state.settings?.debug_mode)} onChange={(value) => onPatchSettings({ debug_mode: value })} />
     </section>

@@ -19,6 +19,10 @@ node_modules/
 /logs_vite_pid.txt
 /_archive/
 frontend/logs/
+app_current/
+*.log
+frontend/.env
+
 
 
 

@@ -1,29 +1,38 @@
 # JARVIS PC V2 Minimal Assistant
 
-## Dev запуск
+## Как запускать свежую dev-версию
+Запустите `RUN_DEV_FRESH.bat` двойным щелчком мыши в корне проекта.
+Это запустит:
+- FastAPI Backend из исходников
+- Vite Frontend Dev Server с hot-reload
+- Electron в режиме разработки
+При закрытии Electron-окна все фоновые процессы backend/frontend автоматически остановятся.
 
-1. Backend: `cd backend && python run_backend.py`
-2. Frontend: `cd frontend && npm.cmd run dev`
-3. Открыть UI: `http://127.0.0.1:5173`
+## Как собрать и запустить свежую app-версию
+Запустите `UPDATE_AND_LAUNCH_APP.bat` двойным щелчком мыши в корне проекта.
+Это выполнит:
+1. `git pull`
+2. Проверку зависимостей
+3. Запуск backend-тестов (`pytest`)
+4. Сборку frontend и компиляцию backend в `.exe`
+5. Упаковку Electron-приложения
+6. Автоматическое архивирование старых версий в `_archive/old_builds/`
+7. Копирование свежего билда в папку `app_current/`
+8. Запуск актуального приложения `app_current/JARVIS PC V2.exe`
 
-## Сборка portable
+## Где лежит актуальное приложение
+`app_current/JARVIS PC V2.exe` (это финальная рабочая папка, откуда всегда можно запускать свежую версию).
 
-```powershell
-cd frontend
-npm.cmd run package:portable
-```
+## Почему старый exe не обновляется
+Потому что Electron package содержит уже собранный frontend/backend. После изменений кода надо пересобрать приложение или запускать dev mode.
 
-## Как очистить старые сборки
-
-Скрипт не удаляет файлы. Он переносит старые сборки, установщики и legacy-артефакты в `_archive/old_builds/YYYY-MM-DD_HH-MM/`.
-
+## Как очистить старые архивные сборки
+Скрипт не удаляет файлы безвозвратно. Он переносит старые сборки, установщики и legacy-артефакты в `_archive/old_builds/YYYY-MM-DD_HH-MM/`.
+Для управления архивами можно запустить:
 ```powershell
 python tools\cleanup_old_builds.py
 ```
-
-После запуска проверьте:
-
+После запуска проверьте отчеты:
 - `tools/cleanup_report.txt`
 - `tools/cleanup_report.json`
 
-Скрипт не трогает backend source, `app/`, `src/`, `electron/`, `package.json`, `requirements.txt`, `pyproject.toml`, `config/` и `tools/`.

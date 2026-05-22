@@ -367,7 +367,7 @@ export const api = {
       "welcome-home": "/scenarios/welcome-home",
       news: "/news/open-and-read",
       workspace: "/scenarios/workspace",
-      music: "/scenarios/welcome-home"
+      music: "/scenarios/music"
     };
     return request<CommandResult | Record<string, unknown>>(pathByName[name], {
       method: "POST",
