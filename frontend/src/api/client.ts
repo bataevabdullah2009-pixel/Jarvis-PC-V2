@@ -182,6 +182,7 @@ export type SayResult = {
   audio_available: boolean;
   fallback_used?: boolean;
   error: string | null;
+  fix?: string | null;
 };
 
 export type DebugEnvStatus = {

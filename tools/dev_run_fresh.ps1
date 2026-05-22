@@ -7,6 +7,20 @@ $ErrorActionPreference = "Stop"
 # Determine project root
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
+# Verify project paths
+if (!(Test-Path "$root\backend")) {
+    throw "Backend directory not found at $root\backend"
+}
+if (!(Test-Path "$root\frontend")) {
+    throw "Frontend directory not found at $root\frontend"
+}
+if (!(Test-Path "$root\backend\requirements.txt")) {
+    throw "requirements.txt not found at $root\backend\requirements.txt"
+}
+if (!(Test-Path "$root\frontend\package.json")) {
+    throw "package.json not found at $root\frontend\package.json"
+}
+
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "   JARVIS PC V2 - FRESH DEV RUNNER" -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Cyan
