@@ -56,7 +56,7 @@ $backendProc = Start-Process cmd -ArgumentList "/c title JARVIS Backend && pytho
 
 # 6. Start Frontend Dev Server (Vite) in a separate window
 Write-Host "Launching Vite Frontend Dev Server..." -ForegroundColor Yellow
-$frontendProc = Start-Process cmd -ArgumentList "/c title JARVIS Frontend Dev && npm run dev" -WorkingDirectory "$root\frontend" -PassThru -WindowStyle Normal
+$frontendProc = Start-Process cmd -ArgumentList "/c title JARVIS Frontend Dev && npm.cmd run dev" -WorkingDirectory "$root\frontend" -PassThru -WindowStyle Normal
 
 # 7. Poll Backend health (max 20 seconds)
 Write-Host "Waiting for backend to become ready..." -ForegroundColor Yellow
@@ -93,6 +93,42 @@ if (-not $backendReady) {
     }
     & "$PSScriptRoot\kill_jarvis_processes.ps1"
     throw "Backend startup timeout"
+}
+
+# 7.5 Poll Frontend health (max 20 seconds)
+Write-Host "Waiting for frontend dev server to become ready..." -ForegroundColor Yellow
+$frontendReady = $false
+for ($i = 1; $i -le $maxRetries; $i++) {
+    try {
+        # Using Invoke-WebRequest for the frontend page
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -TimeoutSec 1 -ErrorAction Stop
+        if ($response.StatusCode -eq 200) {
+            $frontendReady = $true
+            Write-Host "Frontend dev server is ready after $i seconds!" -ForegroundColor Green
+            break
+        }
+    }
+    catch {
+        # Silent retry
+    }
+    Write-Host "Polling frontend health ($i/$maxRetries)..." -ForegroundColor Gray
+    Start-Sleep -Seconds 1
+}
+
+if (-not $frontendReady) {
+    Write-Host "==================================================" -ForegroundColor Red
+    Write-Host "ERROR: Frontend dev server failed to respond at http://127.0.0.1:5173 within 20 seconds!" -ForegroundColor Red
+    Write-Host "Check frontend logs or run npm.cmd run dev manually." -ForegroundColor Red
+    Write-Host "==================================================" -ForegroundColor Red
+    
+    if ($backendProc) {
+        Stop-Process -Id $backendProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($frontendProc) {
+        Stop-Process -Id $frontendProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    & "$PSScriptRoot\kill_jarvis_processes.ps1"
+    throw "Frontend startup timeout"
 }
 
 # 8. Show console addresses

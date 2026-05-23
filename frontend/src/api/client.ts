@@ -75,9 +75,30 @@ export type CommandResult = {
     ai_ms: number;
     tts_ms: number;
     total_ms: number;
+    openrouter_ms?: number;
+    local_command_ms?: number;
+    tts_generate_ms?: number;
   };
   actions: CommandAction[];
   requires_confirmation: boolean;
+  ok?: boolean;
+  plan?: {
+    status?: string;
+    error_type?: string;
+    status_code?: number;
+    error_message?: string;
+    fix?: string;
+  } | null;
+  error?: {
+    code: string;
+    type?: string;
+    message: string;
+    fix?: string;
+    status_code?: number;
+  } | null;
+  error_type?: string;
+  status_code?: number;
+  fix?: string;
 };
 
 export type VoiceDependencyData = {
@@ -172,6 +193,7 @@ export type TTSStatusData = {
   require_fish_audio?: boolean;
   last_provider_used?: string | null;
   last_error: string | null;
+  voice_locked?: boolean;
 };
 
 export type SayResult = {
@@ -196,6 +218,7 @@ export type DebugEnvStatus = {
     key_present: boolean;
     key_prefix: string | null;
     model: string;
+    model_present?: boolean;
   };
   fish_audio: {
     key_present: boolean;

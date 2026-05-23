@@ -125,6 +125,23 @@ try {
     }
     $buildInfo | ConvertTo-Json | Out-File -FilePath "$appCurrent\BUILD_INFO.json" -Encoding utf8
 
+    # 11.5 Create/update Desktop shortcut
+    Write-Host "Creating/updating Desktop shortcut..." -ForegroundColor Yellow
+    $desktopDir = [System.Environment]::GetFolderPath("Desktop")
+    $shortcutPath = Join-Path $desktopDir "JARVIS PC V2 - CURRENT.lnk"
+    try {
+        $wshell = New-Object -ComObject Wscript.Shell
+        $shortcut = $wshell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = Join-Path $appCurrent "JARVIS PC V2.exe"
+        $shortcut.WorkingDirectory = $appCurrent
+        $shortcut.Description = "JARVIS PC V2 - Current Active Build"
+        $shortcut.Save()
+        Write-Host "Desktop shortcut created/updated successfully at: $shortcutPath" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Warning: Could not create desktop shortcut: $_" -ForegroundColor Yellow
+    }
+
     # 12. Run fresh app
     Write-Host "Launching fresh JARVIS PC V2 from app_current..." -ForegroundColor Green
     Set-Location $root
