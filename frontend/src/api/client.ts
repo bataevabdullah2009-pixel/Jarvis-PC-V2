@@ -214,6 +214,7 @@ export type BuildInfoData = {
   frontend_mode?: string;
   running_from_source?: boolean;
   packaged?: boolean;
+  build_info_found?: boolean;
 };
 
 export type SayResult = {

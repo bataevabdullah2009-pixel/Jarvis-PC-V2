@@ -186,13 +186,26 @@ class SpeechOrchestrator:
 
         logger.info("[SPEECH] Primary TTS requested: %s", primary)
 
-        # Attempt primary provider
+        # Pre-check Fish Audio configuration
+        fish_configured = bool(self.settings.fish_audio_api_key and self.settings.fish_audio_voice_id)
+        fish_error_type = None
+        if primary == "fish_audio" and not fish_configured:
+            fish_error_type = "fish_key_missing" if not self.settings.fish_audio_api_key else "fish_voice_id_missing"
+            primary_fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в .env"
+        else:
+            primary_fix = None
+
+        # Attempt primary provider if available
         primary_result = None
-        try:
-            primary_result = self._try_provider(primary, safe_text, dry_run, blocking=blocking)
-        except Exception as e:
-            logger.exception("[SPEECH] Primary provider %s raised an exception: %s", primary, e)
-            primary_result = {"ok": False, "error": str(e), "status": "failed"}
+        if primary == "fish_audio" and not fish_configured:
+            last_error = "Fish Audio is not configured: " + ("API key is missing" if fish_error_type == "fish_key_missing" else "Voice ID is missing")
+            primary_result = {"ok": False, "error": last_error, "status": "failed", "error_type": fish_error_type, "fix": primary_fix}
+        else:
+            try:
+                primary_result = self._try_provider(primary, safe_text, dry_run, blocking=blocking)
+            except Exception as e:
+                logger.exception("[SPEECH] Primary provider %s raised an exception: %s", primary, e)
+                primary_result = {"ok": False, "error": str(e), "status": "failed"}
 
         if primary_result and primary_result["ok"]:
             _LAST_TTS_ERROR = None
@@ -206,25 +219,28 @@ class SpeechOrchestrator:
         _LAST_TTS_ERROR = str(last_error)
         logger.warning("[SPEECH] Primary provider %s failed: %s", primary, last_error)
 
-        primary_fix = None
-        if primary == "fish_audio":
-            if not self.settings.fish_audio_api_key or not self.settings.fish_audio_voice_id:
-                primary_fix = "Голос Джарвиса временно недоступен. Проверьте Fish Audio key / voice id / лимиты."
+        if not primary_fix:
+            if primary == "fish_audio":
+                primary_fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в .env"
+                fish_error_type = "fish_key_missing" if not self.settings.fish_audio_api_key else "fish_voice_id_missing"
             else:
-                primary_fix = f"Голос Джарвиса временно недоступен. Проверьте Fish Audio key / voice id / лимиты. (Ошибка: {last_error})"
-        else:
-            primary_fix = f"Основной голос {primary} недоступен. Ошибка: {last_error}."
+                primary_fix = f"Основной голос {primary} недоступен. Ошибка: {last_error}."
 
         # If tts_require_fish_audio is True, we must NOT use any fallbacks other than text_only!
         if self.settings.tts_require_fish_audio:
             logger.info("[SPEECH] tts_require_fish_audio is True. Skipping non-Fish fallbacks.")
-            return self._text_only(safe_text, f"Primary voice {primary} failed and other voice providers are disallowed by tts_require_fish_audio", started, primary_fix)
+            res = self._text_only(safe_text, f"Primary voice {primary} failed and other voice providers are disallowed by tts_require_fish_audio", started, primary_fix)
+            res["provider"] = "text_only"
+            if fish_error_type:
+                res["error_type"] = fish_error_type
+            return res
 
         if not self.settings.tts_fallback_enabled:
             logger.info("[SPEECH] Fallback disabled. Returning primary failure.")
-            res = primary_result or self._text_only(safe_text, str(last_error), started, primary_fix)
-            if "fix" not in res or not res["fix"]:
-                res["fix"] = primary_fix
+            res = self._text_only(safe_text, str(last_error), started, primary_fix)
+            res["provider"] = "text_only"
+            if fish_error_type:
+                res["error_type"] = fish_error_type
             return res
 
         # Fallback list priority order
@@ -257,7 +273,11 @@ class SpeechOrchestrator:
         # Pure text only fallback
         logger.error("[SPEECH] All TTS providers failed. Returning text-only fallback.")
         _LAST_PROVIDER_USED = "text_only"
-        return self._text_only(safe_text, "All TTS providers failed.", started, primary_fix)
+        res = self._text_only(safe_text, "All TTS providers failed.", started, primary_fix)
+        res["provider"] = "text_only"
+        if fish_error_type:
+            res["error_type"] = fish_error_type
+        return res
 
     def _try_provider(self, provider: str, text: str, dry_run: bool, blocking: bool = False) -> dict[str, Any] | None:
         logger = _speech_logger()

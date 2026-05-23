@@ -47,8 +47,8 @@ def _provider_logger(name: str, filename: str) -> logging.Logger:
 
 
 def _fix_for(status_code: int | None, error_type: str) -> str:
-    if error_type in {"key_missing", "env_missing"}:
-        return "Добавьте JARVIS_OPENROUTER_API_KEY в backend/.env или .env файл."
+    if error_type in {"key_missing", "env_missing", "openrouter_key_missing"}:
+        return "Добавьте JARVIS_OPENROUTER_API_KEY в .env"
     if error_type == "model_missing":
         return "Добавьте JARVIS_OPENROUTER_MODEL в backend/.env или .env файл."
     if error_type == "offline_mode":
@@ -75,7 +75,7 @@ def _fix_for(status_code: int | None, error_type: str) -> str:
 
 
 def _error_message(status_code: int | None, error_type: str, raw_message: str, model: str) -> str:
-    if error_type in {"key_missing", "env_missing"}:
+    if error_type in {"key_missing", "env_missing", "openrouter_key_missing"}:
         return "OpenRouter API key is missing."
     if error_type == "model_missing":
         return "OpenRouter model is missing."
@@ -171,7 +171,7 @@ class OpenRouterPlanner:
             ai_logger.info("[AI] error=%s", result.error_message)
             return result
         if not self.settings.openrouter_api_key:
-            result = self._unavailable("key_missing", None, "openrouter_api_key_missing")
+            result = self._unavailable("openrouter_key_missing", None, "openrouter_api_key_missing")
             openrouter_logger.info("[OPENROUTER] called=false reason=missing_key")
             ai_logger.info("[AI] error=%s", result.error_message)
             return result

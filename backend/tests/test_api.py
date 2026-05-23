@@ -351,7 +351,7 @@ def test_openrouter_no_key(monkeypatch) -> None:
     res = planner.test("Привет")
     assert res["ok"] is False
     assert res["called"] is False
-    assert res["error_type"] == "key_missing"
+    assert res["error_type"] == "openrouter_key_missing"
     assert "API key is missing" in res["error_message"]
     assert "fix" in res
 

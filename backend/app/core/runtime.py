@@ -14,12 +14,25 @@ def build_info(settings: Settings) -> dict[str, Any]:
     # Determine if frozen (packaged)
     frozen = getattr(sys, "frozen", False)
     
+    # Determine project_root and app_current
+    proj_root = Path(os.getenv("JARVIS_PROJECT_ROOT", PROJECT_ROOT)).resolve()
+    
+    env_file_var = os.getenv("JARVIS_ENV_FILE")
+    if env_file_var:
+        app_curr = Path(env_file_var).resolve().parent
+    elif frozen:
+        app_curr = Path(sys.executable).resolve().parents[2]
+    else:
+        app_curr = proj_root / "app_current"
+
     # Try to load BUILD_INFO.json from multiple possible locations
     build_info_data = {}
+    build_info_found = False
     candidates = [
-        PROJECT_ROOT / "app_current" / "BUILD_INFO.json",
-        PROJECT_ROOT / "BUILD_INFO.json",
-        Path(sys.executable).resolve().parent.parent.parent / "BUILD_INFO.json" if frozen else None,
+        app_curr / "BUILD_INFO.json",
+        proj_root / "app_current" / "BUILD_INFO.json",
+        proj_root / "BUILD_INFO.json",
+        Path(sys.executable).resolve().parents[2] / "BUILD_INFO.json" if frozen else None,
         Path(__file__).resolve().parents[3] / "app_current" / "BUILD_INFO.json",
     ]
     for candidate in candidates:
@@ -27,6 +40,7 @@ def build_info(settings: Settings) -> dict[str, Any]:
             try:
                 with open(candidate, "r", encoding="utf-8") as f:
                     build_info_data = json.load(f)
+                build_info_found = True
                 break
             except Exception:
                 pass
@@ -69,7 +83,8 @@ def build_info(settings: Settings) -> dict[str, Any]:
         "running_from_source": not frozen,
         "packaged": frozen,
         "backend_executable_path": sys.executable if frozen else sys.argv[0],
-        "frontend_mode": frontend_mode
+        "frontend_mode": frontend_mode,
+        "build_info_found": build_info_found
     }
 
 

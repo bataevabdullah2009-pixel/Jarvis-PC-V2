@@ -20,11 +20,11 @@ class AIPlanner:
                 answer_text=warning_text,
                 actions=[],
                 provider="openrouter",
-                error="key_missing",
+                error="openrouter_key_missing",
                 model=self.settings.openrouter_model,
-                error_type="key_missing",
+                error_type="openrouter_key_missing",
                 error_message="OpenRouter API key is missing.",
-                fix="Добавьте JARVIS_OPENROUTER_API_KEY в C:\\Jarvis PC V2\\backend\\.env",
+                fix="Добавьте JARVIS_OPENROUTER_API_KEY в .env",
                 latency_ms=0,
                 openrouter_called=False
             )

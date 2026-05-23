@@ -97,19 +97,21 @@ class FishAudioTTS:
         safe_text = self._tts_text(text)
 
         if not self.available():
-            fish_logger.info("[FISH] called=false endpoint=%s voice_id_present=%s reason=missing_key_or_voice", self.endpoint, bool(self.settings.fish_audio_voice_id))
-            provider_logger.info("[FISH] called=false endpoint=%s voice_id_present=%s reason=missing_key_or_voice", self.endpoint, bool(self.settings.fish_audio_voice_id))
-            fish_logger.info("[FISH] status_code=null latency_ms=0 error_type=env_missing error_message=missing_key_or_voice retry_count=0")
-            provider_logger.info("[FISH] status_code=null audio_bytes=0 error_type=env_missing error_message=missing_key_or_voice retry_count=0")
+            err_type = "fish_key_missing" if not self.settings.fish_audio_api_key else "fish_voice_id_missing"
+            fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в .env"
+            fish_logger.info("[FISH] called=false endpoint=%s voice_id_present=%s reason=%s", self.endpoint, bool(self.settings.fish_audio_voice_id), err_type)
+            provider_logger.info("[FISH] called=false endpoint=%s voice_id_present=%s reason=%s", self.endpoint, bool(self.settings.fish_audio_voice_id), err_type)
+            fish_logger.info("[FISH] status_code=null latency_ms=0 error_type=%s error_message=missing_key_or_voice retry_count=0", err_type)
+            provider_logger.info("[FISH] status_code=null audio_bytes=0 error_type=%s error_message=missing_key_or_voice retry_count=0", err_type)
             return {
                 "ok": False,
                 "provider": "fish_audio",
                 "endpoint": self.endpoint,
                 "called": False,
                 "status_code": None,
-                "error_type": "env_missing",
+                "error_type": err_type,
                 "error_message": "Fish Audio key or voice id is missing.",
-                "fix": _fix_for(None, "env_missing"),
+                "fix": fix,
                 "retry_count": 0,
                 "latency_ms": 0,
             }
@@ -224,7 +226,9 @@ class FishAudioTTS:
     def speak(self, text: str, *, dry_run: bool = False) -> dict[str, Any]:
         safe_text = self._tts_text(text)
         if not self.available():
-            return self._failed("not_configured", "Fish Audio key or voice id is missing.", None, 0, safe_text, error_type="env_missing", called=False)
+            err_type = "fish_key_missing" if not self.settings.fish_audio_api_key else "fish_voice_id_missing"
+            fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в .env"
+            return self._failed("not_configured", "Fish Audio key or voice id is missing.", None, 0, safe_text, error_type=err_type, called=False, fix=fix)
 
         if dry_run:
             return {

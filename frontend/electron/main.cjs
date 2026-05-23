@@ -114,14 +114,26 @@ function startBackend() {
     .catch(() => {
       const backend = findBackendCommand();
       writeElectronLog(`spawning backend command=${backend.command} cwd=${backend.cwd}`);
+      const appCurrentDir = isDev
+        ? path.join(projectRoot(), "app_current")
+        : (process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath));
+      const projRoot = isDev
+        ? projectRoot()
+        : path.resolve(appCurrentDir, "..");
+      const envFile = isDev
+        ? path.join(projRoot, "backend", ".env")
+        : path.join(appCurrentDir, ".env");
+      const frontendMode = isDev ? "dev" : "packaged";
+
       backendProcess = spawn(backend.command, backend.args, {
         cwd: backend.cwd,
         env: {
           ...process.env,
           JARVIS_BACKEND_PORT: BACKEND_PORT,
           JARVIS_BACKEND_HOST: "127.0.0.1",
-          JARVIS_PROJECT_ROOT: isDev ? projectRoot() : process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath),
-          JARVIS_FRONTEND_MODE: isDev ? "dev" : "packaged",
+          JARVIS_PROJECT_ROOT: projRoot,
+          JARVIS_ENV_FILE: envFile,
+          JARVIS_FRONTEND_MODE: frontendMode,
           LICENSE_ENABLED: "false"
         },
         windowsHide: true,

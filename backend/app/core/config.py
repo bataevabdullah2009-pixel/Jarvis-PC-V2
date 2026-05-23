@@ -78,7 +78,7 @@ ENV_LOAD_ERRORS: dict[str, str] = {}
 ENV_LOCK = threading.Lock()
 
 
-def _load_env_file(path: Path) -> bool:
+def _load_env_file(path: Path, override: bool = True) -> bool:
     if not path.exists():
         return False
 
@@ -86,7 +86,7 @@ def _load_env_file(path: Path) -> bool:
         try:
             from dotenv import load_dotenv
 
-            load_dotenv(path, override=True)
+            load_dotenv(path, override=override)
         except ImportError:
             for raw_line in path.read_text(encoding="utf-8").splitlines():
                 line = raw_line.strip()
@@ -95,7 +95,8 @@ def _load_env_file(path: Path) -> bool:
                 key, value = line.split("=", 1)
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                os.environ[key] = value
+                if override or key not in os.environ:
+                    os.environ[key] = value
     except Exception as exc:
         ENV_LOAD_ERRORS[str(path)] = f"{exc.__class__.__name__}: {exc}"
         return False
@@ -106,24 +107,69 @@ def load_environment() -> None:
     global ENV_PATHS_CHECKED, ENV_PATHS_LOADED
 
     with ENV_LOCK:
-        base_paths: list[Path] = [
-            PROJECT_ROOT / ".env",
-            Path.cwd() / ".env",
-        ]
-        for root in _candidate_project_roots():
-            base_paths.append(root / ".env")
+        paths_to_check: list[Path] = []
 
-        backend_paths: list[Path] = [
-            PROJECT_ROOT / "backend" / ".env",
-        ]
-        for root in _candidate_project_roots():
-            backend_paths.append(root / "backend" / ".env")
+        # Find JARVIS_ENV_FILE if specified
+        env_file_var = os.getenv("JARVIS_ENV_FILE")
+        jarvis_env_path = Path(env_file_var).resolve() if env_file_var else None
 
-        ENV_PATHS_CHECKED = _dedupe_paths(base_paths) + _dedupe_paths(backend_paths)
+        # Determine project_root and app_current
+        proj_root = Path(os.getenv("JARVIS_PROJECT_ROOT", PROJECT_ROOT)).resolve()
+        
+        if env_file_var:
+            app_curr = Path(env_file_var).resolve().parent
+        elif getattr(sys, "frozen", False):
+            app_curr = Path(sys.executable).resolve().parents[2]
+        else:
+            app_curr = proj_root / "app_current"
+
+        # Order of search paths:
+        # 2. <project_root>\backend\.env
+        paths_to_check.append(proj_root / "backend" / ".env")
+        # 3. <project_root>\.env
+        paths_to_check.append(proj_root / ".env")
+        # 4. <app_current>\.env
+        paths_to_check.append(app_curr / ".env")
+        # 5. <app_current>\resources\backend\.env
+        paths_to_check.append(app_curr / "resources" / "backend" / ".env")
+        # 6. %APPDATA%\Jarvis PC V2\.env
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            paths_to_check.append(Path(appdata) / "Jarvis PC V2" / ".env")
+        # 7. %USERPROFILE%\.jarvis_pc_v2\.env
+        userprofile = os.getenv("USERPROFILE")
+        if userprofile:
+            paths_to_check.append(Path(userprofile) / ".jarvis_pc_v2" / ".env")
+
+        # Deduplicate paths_to_check
+        deduped = _dedupe_paths(paths_to_check)
+
+        ENV_PATHS_CHECKED = []
+        if jarvis_env_path:
+            ENV_PATHS_CHECKED.append(jarvis_env_path)
+
+        for p in deduped:
+            if jarvis_env_path:
+                try:
+                    if p.resolve() == jarvis_env_path.resolve():
+                        continue
+                except OSError:
+                    if p.absolute() == jarvis_env_path.absolute():
+                        continue
+            ENV_PATHS_CHECKED.append(p)
+
         ENV_PATHS_LOADED = []
         ENV_LOAD_ERRORS.clear()
+
+        # Load order: JARVIS_ENV_FILE gets loaded first with override=True
+        if jarvis_env_path and _load_env_file(jarvis_env_path, override=True):
+            ENV_PATHS_LOADED.append(jarvis_env_path)
+
+        # The rest get loaded with override=False (so higher priority files take precedence)
         for path in ENV_PATHS_CHECKED:
-            if _load_env_file(path):
+            if jarvis_env_path and path.resolve() == jarvis_env_path.resolve():
+                continue
+            if _load_env_file(path, override=False):
                 ENV_PATHS_LOADED.append(path)
 
 
@@ -143,28 +189,38 @@ def env_bool(*names: str, default: bool = False) -> bool:
 
 
 def env_debug_status(settings: "Settings") -> dict[str, Any]:
-    def prefix(value: str | None, length: int = 12) -> str | None:
-        if not value:
-            return None
-        if len(value) <= length:
-            return value
-        return value[:length] + "..."
+    frozen = getattr(sys, "frozen", False)
+    runtime_mode = "packaged" if frozen else "dev"
+
+    or_key = settings.openrouter_api_key
+    if or_key:
+        or_prefix = "sk-or-v1..." if or_key.startswith("sk-or-v1") else or_key[:8] + "..."
+    else:
+        or_prefix = None
+
+    fa_key = settings.fish_audio_api_key
+    fa_prefix = fa_key[:8] + "..." if fa_key else None
+
+    fa_voice = settings.fish_audio_voice_id
+    fa_voice_preview = fa_voice[:8] + "..." if fa_voice else None
 
     checked = [str(path) for path in _dedupe_paths(ENV_PATHS_CHECKED)]
     loaded = [str(path) for path in _dedupe_paths(ENV_PATHS_LOADED)]
 
     fixes = []
     if not settings.openrouter_api_key:
-        fixes.append("Добавьте JARVIS_OPENROUTER_API_KEY в C:\\Jarvis PC V2\\backend\\.env")
-    if not settings.openrouter_model:
-        fixes.append("Добавьте JARVIS_OPENROUTER_MODEL в C:\\Jarvis PC V2\\backend\\.env")
+        fixes.append("Добавьте JARVIS_OPENROUTER_API_KEY в .env")
     if not settings.fish_audio_api_key:
-        fixes.append("Добавьте JARVIS_FISH_AUDIO_API_KEY в C:\\Jarvis PC V2\\backend\\.env")
+        fixes.append("Добавьте JARVIS_FISH_AUDIO_API_KEY в .env")
     if not settings.fish_audio_voice_id:
-        fixes.append("Добавьте JARVIS_FISH_AUDIO_VOICE_ID в C:\\Jarvis PC V2\\backend\\.env")
+        fixes.append("Добавьте JARVIS_FISH_AUDIO_VOICE_ID в .env")
 
     return {
         "env_loaded": bool(ENV_PATHS_LOADED),
+        "runtime_mode": runtime_mode,
+        "cwd": os.getcwd(),
+        "project_root": str(PROJECT_ROOT),
+        "backend_root": str(BACKEND_ROOT),
         "paths_checked": checked,
         "paths_loaded": loaded,
         "env_paths_checked": checked,
@@ -172,25 +228,20 @@ def env_debug_status(settings: "Settings") -> dict[str, Any]:
         "env_errors": ENV_LOAD_ERRORS,
         "openrouter": {
             "key_present": bool(settings.openrouter_api_key),
-            "key_prefix": prefix(settings.openrouter_api_key, 12),
+            "key_prefix": or_prefix,
             "model": settings.openrouter_model,
             "model_present": bool(settings.openrouter_model),
-            "missing_variable": None if settings.openrouter_api_key else "JARVIS_OPENROUTER_API_KEY or OPENROUTER_API_KEY",
         },
         "fish_audio": {
             "key_present": bool(settings.fish_audio_api_key),
-            "key_prefix": prefix(settings.fish_audio_api_key, 8),
+            "key_prefix": fa_prefix,
             "voice_id_present": bool(settings.fish_audio_voice_id),
-            "voice_id_prefix": prefix(settings.fish_audio_voice_id, 8),
-            "missing_key_variable": None if settings.fish_audio_api_key else "JARVIS_FISH_AUDIO_API_KEY or FISH_AUDIO_API_KEY",
-            "missing_voice_id_variable": None if settings.fish_audio_voice_id else "JARVIS_FISH_AUDIO_VOICE_ID or FISH_AUDIO_VOICE_ID",
+            "voice_id_preview": fa_voice_preview,
         },
         "tts": {
             "primary": settings.tts_primary,
-            "fallback": settings.tts_fallback,
-            "fallback_enabled": settings.tts_fallback_enabled,
             "require_fish_audio": settings.tts_require_fish_audio,
-            "timeout_seconds": settings.tts_timeout_seconds,
+            "fallback_enabled": settings.tts_fallback_enabled,
         },
         "fixes": fixes,
     }
@@ -280,10 +331,10 @@ class Settings:
         settings.resemble_api_key = env_value("JARVIS_RESEMBLE_API_KEY", "RESEMBLE_API_KEY")
         settings.resemble_project_id = env_value("JARVIS_RESEMBLE_PROJECT_ID", "RESEMBLE_PROJECT_ID")
         settings.resemble_voice_id = env_value("JARVIS_RESEMBLE_VOICE_ID", "RESEMBLE_VOICE_ID")
-        settings.tts_primary = env_value("TTS_PRIMARY", default=settings.tts_primary) or settings.tts_primary
-        settings.tts_fallback = env_value("TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
-        settings.tts_fallback_enabled = env_bool("TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
-        settings.tts_require_fish_audio = env_bool("TTS_REQUIRE_FISH_AUDIO", "JARVIS_VOICE_LOCK", default=settings.tts_require_fish_audio)
+        settings.tts_primary = env_value("JARVIS_TTS_PRIMARY", "TTS_PRIMARY", default=settings.tts_primary) or settings.tts_primary
+        settings.tts_fallback = env_value("JARVIS_TTS_FALLBACK", "TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
+        settings.tts_fallback_enabled = env_bool("JARVIS_TTS_FALLBACK_ENABLED", "TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
+        settings.tts_require_fish_audio = env_bool("JARVIS_TTS_REQUIRE_FISH_AUDIO", "TTS_REQUIRE_FISH_AUDIO", "JARVIS_VOICE_LOCK", default=settings.tts_require_fish_audio)
         try:
             settings.tts_timeout_seconds = int(env_value("TTS_TIMEOUT_SECONDS", default=str(settings.tts_timeout_seconds)) or settings.tts_timeout_seconds)
         except ValueError:

@@ -9,6 +9,8 @@ class TTSService(SpeechOrchestrator):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
 
-    def speak(self, text: str, *, dry_run: bool = False) -> dict[str, Any]:
+    def speak(self, text: str, *, dry_run: bool = False, blocking: bool = False) -> dict[str, Any]:
         """Backwards-compatibility method mapping speak to say."""
+        if blocking:
+            return self.say(text, dry_run=dry_run, blocking=blocking)
         return self.say(text, dry_run=dry_run)

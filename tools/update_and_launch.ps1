@@ -113,6 +113,23 @@ try {
         throw "Standalone launcher file copy validation failed: $launcherExe was not found after copying!"
     }
 
+    # 10.5 Sync Environment File
+    $envSourceDetected = $false
+    $envSourcePath = $null
+    $targetEnv = Join-Path $appCurrent ".env"
+
+    if (Test-Path "$root\backend\.env") {
+        Copy-Item -Path "$root\backend\.env" -Destination $targetEnv -Force
+        $envSourceDetected = $true
+        $envSourcePath = (Resolve-Path "$root\backend\.env").Path
+    } elseif (Test-Path "$root\.env") {
+        Copy-Item -Path "$root\.env" -Destination $targetEnv -Force
+        $envSourceDetected = $true
+        $envSourcePath = (Resolve-Path "$root\.env").Path
+    } else {
+        Write-Host "ENV NOT FOUND: OpenRouter/Fish Audio will be unavailable" -ForegroundColor Red
+    }
+
     # 11. Write VERSION.txt and BUILD_INFO.json
     Write-Host "Writing version and build metadata files..." -ForegroundColor Yellow
     $packageJson = Get-Content -Raw -Path "$root\frontend\package.json" | ConvertFrom-Json
@@ -130,6 +147,9 @@ try {
         git_branch = $gitBranch
         frontend_version = $packageVersion
         backend_ready = $true
+        packaged = $true
+        env_source_detected = $envSourceDetected
+        env_source_path = $envSourcePath
     }
     $buildInfo | ConvertTo-Json | Out-File -FilePath "$appCurrent\BUILD_INFO.json" -Encoding utf8
 

@@ -231,7 +231,23 @@ export function MinimalUI({
           })}
         </nav>
         <div className="sidebar-footer">
-          <div className="build-label">Build: {state.buildInfo?.git_sha ?? "dev"}</div>
+          <div className="build-label" title={state.buildInfo?.git_sha ?? "dev"}>
+            Build: {(() => {
+              const info = state.buildInfo;
+              if (!info) return "dev";
+              if (info.git_sha && info.git_sha !== "unknown") return info.git_sha;
+              if (info.packaged) {
+                if (info.build_info_found === false) {
+                  return "BUILD_INFO.json not found";
+                }
+                if (!info.git_sha || info.git_sha === "unknown") {
+                  return "backend did not return git_sha";
+                }
+                return "running old exe";
+              }
+              return "dev";
+            })()}
+          </div>
           <div className="build-date">{state.buildInfo?.built_at?.split(' ')[0] ?? ""}</div>
         </div>
       </aside>
