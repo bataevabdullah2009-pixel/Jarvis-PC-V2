@@ -18,6 +18,7 @@ OPENROUTER_TOTAL_TIMEOUT_SECONDS = 15.0
 MAX_RETRIES = 1
 SYSTEM_PROMPT = (
     "Ты — JARVIS, русскоязычный персональный AI-ассистент на Windows PC.\n"
+    "Отвечай коротко: 1–3 предложения. Для голосового ответа не больше 350 символов, если пользователь не просит подробности.\n"
     "Отвечай естественно, кратко, уверенно и полезно.\n"
     "Твой стиль: спокойный, умный, немного кинематографичный, но без пафоса.\n"
     "Можно обращаться к пользователю \"сэр\", если это звучит уместно.\n"
@@ -156,7 +157,7 @@ class OpenRouterPlanner:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def plan(self, text: str) -> PlannerResult:
+    def plan(self, text: str, context: dict[str, Any] | None = None) -> PlannerResult:
         ai_logger = _provider_logger("jarvis.ai_fallback", "ai_fallback.log")
         provider_logger = _provider_logger("jarvis.provider", "provider.log")
         openrouter_logger = _provider_logger("jarvis.provider.openrouter", "openrouter.log")
@@ -180,14 +181,29 @@ class OpenRouterPlanner:
             ai_logger.info("[AI] error=%s", result.error_message)
             return result
 
+        context = context or {}
+        source = context.get("source", "manual")
+        route = context.get("route")
+
+        # Dynamic prompt engineering depending on source/route
+        sys_prompt = SYSTEM_PROMPT
+        max_tokens = self.settings.openrouter_max_tokens
+        temperature = self.settings.openrouter_temperature
+
+        if source == "voice" or route == "voice":
+            sys_prompt += "\nОТВЕЧАЙ МАКСИМАЛЬНО КРАТКО (не более 1 предложения, до 150 символов), так как твой ответ будет озвучен голосом."
+            max_tokens = min(max_tokens, 80)
+        elif source in {"hud", "manual"}:
+            sys_prompt += "\nОтвечай кратко, но полезно (1-3 предложения, до 300 символов)."
+
         payload = {
             "model": self.settings.openrouter_model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": text},
             ],
-            "temperature": 0.6,
-            "max_tokens": 500,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
@@ -200,9 +216,9 @@ class OpenRouterPlanner:
         status_code: int | None = None
         retry_count = 0
         timeout = httpx.Timeout(
-            OPENROUTER_TOTAL_TIMEOUT_SECONDS,
-            connect=CONNECT_TIMEOUT_SECONDS,
-            read=READ_TIMEOUT_SECONDS,
+            self.settings.openrouter_total_timeout,
+            connect=self.settings.openrouter_connect_timeout,
+            read=self.settings.openrouter_read_timeout,
             write=5.0,
             pool=5.0,
         )
@@ -211,23 +227,23 @@ class OpenRouterPlanner:
             "[OpenRouter] request started endpoint=%s model=%s connect_timeout=%s read_timeout=%s total_timeout=%s",
             self.endpoint,
             self.settings.openrouter_model,
-            CONNECT_TIMEOUT_SECONDS,
-            READ_TIMEOUT_SECONDS,
-            OPENROUTER_TOTAL_TIMEOUT_SECONDS,
+            self.settings.openrouter_connect_timeout,
+            self.settings.openrouter_read_timeout,
+            self.settings.openrouter_total_timeout,
         )
         openrouter_logger.info(
             "[OPENROUTER] called=true endpoint=%s model=%s connect_timeout=%s read_timeout=%s total_timeout=%s",
             self.endpoint,
             self.settings.openrouter_model,
-            CONNECT_TIMEOUT_SECONDS,
-            READ_TIMEOUT_SECONDS,
-            OPENROUTER_TOTAL_TIMEOUT_SECONDS,
+            self.settings.openrouter_connect_timeout,
+            self.settings.openrouter_read_timeout,
+            self.settings.openrouter_total_timeout,
         )
 
         data: dict[str, Any] | None = None
         raw_response_preview: str | None = None
         last_error: Exception | None = None
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(self.settings.openrouter_max_retries + 1):
             retry_count = attempt
             try:
                 with httpx.Client(timeout=timeout, trust_env=True) as client:

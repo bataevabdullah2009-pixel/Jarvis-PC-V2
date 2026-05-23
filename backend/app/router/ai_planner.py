@@ -29,7 +29,10 @@ class AIPlanner:
                 openrouter_called=False
             )
 
-        result = self.openrouter.plan(text)
+        try:
+            result = self.openrouter.plan(text, context)
+        except TypeError:
+            result = self.openrouter.plan(text)
 
         if result.status == "unavailable":
             return PlannerResult(

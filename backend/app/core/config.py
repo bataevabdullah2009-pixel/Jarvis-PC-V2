@@ -238,6 +238,15 @@ class Settings:
     tts_fallback: str = "pyttsx3"
     tts_require_fish_audio: bool = False
     tts_timeout_seconds: int = 25
+    tts_pyttsx3_voice_id: str | None = None
+    tts_pyttsx3_rate: int = 175
+    tts_pyttsx3_volume: float = 0.8
+    openrouter_max_tokens: int = 180
+    openrouter_temperature: float = 0.4
+    openrouter_connect_timeout: int = 4
+    openrouter_read_timeout: int = 8
+    openrouter_total_timeout: int = 10
+    openrouter_max_retries: int = 0
     allowed_apps: dict[str, list[str]] = field(
         default_factory=lambda: {
             "telegram": ["telegram", "Telegram.exe"],
@@ -274,11 +283,46 @@ class Settings:
         settings.tts_primary = env_value("TTS_PRIMARY", default=settings.tts_primary) or settings.tts_primary
         settings.tts_fallback = env_value("TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
         settings.tts_fallback_enabled = env_bool("TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
-        settings.tts_require_fish_audio = env_bool("TTS_REQUIRE_FISH_AUDIO", default=settings.tts_require_fish_audio)
+        settings.tts_require_fish_audio = env_bool("TTS_REQUIRE_FISH_AUDIO", "JARVIS_VOICE_LOCK", default=settings.tts_require_fish_audio)
         try:
             settings.tts_timeout_seconds = int(env_value("TTS_TIMEOUT_SECONDS", default=str(settings.tts_timeout_seconds)) or settings.tts_timeout_seconds)
         except ValueError:
             settings.tts_timeout_seconds = 25
+        settings.tts_pyttsx3_voice_id = env_value("TTS_PYTTSX3_VOICE_ID", default=settings.tts_pyttsx3_voice_id)
+        try:
+            settings.tts_pyttsx3_rate = int(env_value("TTS_PYTTSX3_RATE", default=str(settings.tts_pyttsx3_rate)) or settings.tts_pyttsx3_rate)
+        except ValueError:
+            pass
+        try:
+            settings.tts_pyttsx3_volume = float(env_value("TTS_PYTTSX3_VOLUME", default=str(settings.tts_pyttsx3_volume)) or settings.tts_pyttsx3_volume)
+        except ValueError:
+            pass
+
+        try:
+            settings.openrouter_max_tokens = int(env_value("OPENROUTER_MAX_TOKENS", default=str(settings.openrouter_max_tokens)) or settings.openrouter_max_tokens)
+        except ValueError:
+            pass
+        try:
+            settings.openrouter_temperature = float(env_value("OPENROUTER_TEMPERATURE", default=str(settings.openrouter_temperature)) or settings.openrouter_temperature)
+        except ValueError:
+            pass
+        try:
+            settings.openrouter_connect_timeout = int(env_value("OPENROUTER_CONNECT_TIMEOUT", default=str(settings.openrouter_connect_timeout)) or settings.openrouter_connect_timeout)
+        except ValueError:
+            pass
+        try:
+            settings.openrouter_read_timeout = int(env_value("OPENROUTER_READ_TIMEOUT", default=str(settings.openrouter_read_timeout)) or settings.openrouter_read_timeout)
+        except ValueError:
+            pass
+        try:
+            settings.openrouter_total_timeout = int(env_value("OPENROUTER_TOTAL_TIMEOUT", default=str(settings.openrouter_total_timeout)) or settings.openrouter_total_timeout)
+        except ValueError:
+            pass
+        try:
+            settings.openrouter_max_retries = int(env_value("OPENROUTER_MAX_RETRIES", default=str(settings.openrouter_max_retries)) or settings.openrouter_max_retries)
+        except ValueError:
+            pass
+
         settings.license_enabled = os.getenv("LICENSE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         settings.allowed_folders = [settings.workspace_project_path]
         return settings

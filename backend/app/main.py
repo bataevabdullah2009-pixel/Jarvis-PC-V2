@@ -204,6 +204,30 @@ def voice_tts_status() -> dict[str, Any]:
     return envelope(TTSService(get_settings()).status())
 
 
+@app.get("/voice/offline-voices")
+def voice_offline_voices() -> dict[str, Any]:
+    try:
+        import pyttsx3
+        import pythoncom
+        pythoncom.CoInitialize()
+        try:
+            engine = pyttsx3.init()
+            voices = engine.getProperty("voices")
+            res = []
+            for v in voices:
+                res.append({
+                    "id": v.id,
+                    "name": v.name,
+                    "languages": getattr(v, "languages", []),
+                    "gender": getattr(v, "gender", None)
+                })
+            return envelope(res)
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception as e:
+        return envelope([], ok=False, error={"code": "OFFLINE_VOICES_ERROR", "message": str(e)})
+
+
 @app.post("/voice/say")
 def voice_say(request: SayRequest) -> dict[str, Any]:
     result = TTSService(get_settings()).speak(request.text)

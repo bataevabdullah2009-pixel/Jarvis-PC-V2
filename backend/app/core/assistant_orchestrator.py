@@ -44,7 +44,8 @@ class AssistantOrchestrator:
         started = time.perf_counter()
         context = context or {}
         context["dry_run"] = context.get("dry_run", False)
-        context["wait_for_tts"] = speak
+        context["speak"] = speak
+        context["wait_for_tts"] = bool(context.get("wait_for_tts", False))
 
         # 1. Receive text
         text_val = (text or "").strip()
@@ -167,12 +168,39 @@ class AssistantOrchestrator:
             
             # Speak fallback text if speak is requested
             if speak:
-                def _speak():
-                    return self.tts.speak(fallback_text, dry_run=context.get("dry_run", False))
-                tts_res = await anyio.to_thread.run_sync(_speak)
-                router_result["tts"] = tts_res
-                router_result["spoken"] = bool(tts_res.get("spoken", False))
-                router_result["fish_audio_called"] = bool(tts_res.get("called", False) and tts_res.get("provider") == "fish_audio")
+                if context.get("wait_for_tts"):
+                    def _speak():
+                        return self.tts.speak(fallback_text, dry_run=context.get("dry_run", False))
+                    tts_res = await anyio.to_thread.run_sync(_speak)
+                    router_result["tts"] = tts_res
+                    router_result["spoken"] = bool(tts_res.get("spoken", False))
+                    router_result["fish_audio_called"] = bool(tts_res.get("called", False) and tts_res.get("provider") == "fish_audio")
+                else:
+                    from app.voice.speech_queue import speech_queue
+                    command_id = router_result.get("command_id") or f"cmd_{uuid4().hex[:12]}"
+                    speech_queue.submit(command_id, "ai_fallback", fallback_text, self.tts)
+                    tts_res = {
+                        "mode": "none",
+                        "provider": "none",
+                        "requested": True,
+                        "called": False,
+                        "async": True,
+                        "spoken": False,
+                        "played": False,
+                        "ok": False,
+                        "audio_available": False,
+                        "pending_audio": True,
+                        "status": "queued",
+                        "status_code": None,
+                        "audio_bytes": 0,
+                        "fallback_used": False,
+                        "error": None,
+                        "latency_ms": 0,
+                        "text": fallback_text[:500],
+                    }
+                    router_result["tts"] = tts_res
+                    router_result["spoken"] = False
+                    router_result["fish_audio_called"] = False
             else:
                 router_result["spoken"] = False
                 router_result["fish_audio_called"] = False

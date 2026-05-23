@@ -254,6 +254,56 @@ export function MinimalUI({
               <div className="reply-card">
                 <span>JARVIS</span>
                 <p>{state.lastResult?.response_text ?? "Готов к команде, сэр."}</p>
+                
+                {state.lastResult && (
+                  <div className="assistant-metrics-card" style={{
+                    marginTop: "12px",
+                    padding: "8px 12px",
+                    background: "rgba(0, 0, 0, 0.25)",
+                    borderRadius: "6px",
+                    fontSize: "0.8rem",
+                    border: "1px solid rgba(255, 255, 255, 0.05)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px"
+                  }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+                      <div>
+                        <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>AI: </span>
+                        <strong style={{ color: "var(--accent)" }}>
+                          {state.lastResult.provider === "openrouter" 
+                            ? `openrouter / ${state.lastResult.model || "unknown"} / ${state.lastResult.latency?.openrouter_ms ?? state.lastResult.latency?.ai_ms ?? 0} ms` 
+                            : state.lastResult.local_matched 
+                              ? `local / ${state.lastResult.latency?.local_command_ms ?? 0} ms` 
+                              : "none"}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>Voice: </span>
+                        <strong style={{ color: "var(--accent-2)" }}>
+                          {state.lastResult.tts?.provider ?? "none"} 
+                          {state.lastResult.tts?.status ? ` (${state.lastResult.tts.status})` : ""}
+                          {state.lastResult.latency?.tts_generate_ms ? ` / ${state.lastResult.latency.tts_generate_ms} ms` : ""}
+                        </strong>
+                      </div>
+                    </div>
+                    
+                    {/* Fallback voice used yellow warning */}
+                    {state.lastResult.tts?.fallback_used && (
+                      <div style={{ color: "#FFE054", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px" }}>
+                        ⚠️ Использован резервный голос: {state.lastResult.tts?.provider ?? "pyttsx3/edge_tts"}
+                      </div>
+                    )}
+                    
+                    {/* Locked voice but Fish failed warning */}
+                    {state.lastResult.tts?.provider === "text_only" && (state.ttsStatus?.voice_locked || state.debugEnv?.tts?.require_fish_audio) && (
+                      <div style={{ color: "#FF5E5E", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px" }}>
+                        ⚠️ Голос Джарвиса недоступен. Чужой голос отключён.
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {state.lastError && <strong>{state.lastError}</strong>}
               </div>
 

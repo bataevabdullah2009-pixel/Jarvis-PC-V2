@@ -51,80 +51,81 @@ def stop_all_audio() -> None:
         pass
 
 
-def play_audio_background(audio_bytes: bytes, audio_format: str) -> None:
-    """Plays audio bytes in a background daemon thread based on format (wav or mp3)."""
+def play_audio_sync(audio_bytes: bytes, audio_format: str) -> None:
+    """Plays audio bytes synchronously based on format (wav or mp3)."""
     logger = _speech_logger()
-    logger.info("[PLAYBACK] Requesting audio: format=%s, bytes=%s", audio_format, len(audio_bytes))
+    logger.info("[PLAYBACK] Requesting audio sync: format=%s, bytes=%s", audio_format, len(audio_bytes))
 
     stop_all_audio()
 
-    def _play_worker():
-        with _PLAYBACK_LOCK:
-            if audio_format.lower() == "wav":
-                patched_audio = audio_bytes
-                if len(audio_bytes) >= 44:
+    with _PLAYBACK_LOCK:
+        if audio_format.lower() == "wav":
+            patched_audio = audio_bytes
+            if len(audio_bytes) >= 44:
+                try:
+                    riff, file_size, wave = struct.unpack("<4sI4s", audio_bytes[:12])
+                    if riff == b"RIFF" and wave == b"WAVE":
+                        offset = 12
+                        data_chunk_offset = -1
+                        while offset < len(audio_bytes) - 8:
+                            chunk_id, chunk_size = struct.unpack("<4sI", audio_bytes[offset:offset+8])
+                            if chunk_id == b"data":
+                                data_chunk_offset = offset
+                                break
+                            if chunk_size < 0 or offset + 8 + chunk_size > len(audio_bytes):
+                                break
+                            offset += 8 + chunk_size
+
+                        if data_chunk_offset != -1:
+                            patched_data = bytearray(audio_bytes)
+                            struct.pack_into("<I", patched_data, 4, len(audio_bytes) - 8)
+                            struct.pack_into("<I", patched_data, data_chunk_offset + 4, len(audio_bytes) - (data_chunk_offset + 8))
+                            patched_audio = bytes(patched_data)
+                except Exception as e:
+                    logger.error("[PLAYBACK] WAV patching error: %s", e)
+
+            try:
+                winsound.PlaySound(patched_audio, winsound.SND_MEMORY)
+            except Exception as e:
+                logger.error("[PLAYBACK] winsound error: %s", e)
+
+        elif audio_format.lower() == "mp3":
+            try:
+                import pygame
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init()
+            except Exception as e:
+                logger.error("[PLAYBACK] pygame.mixer.init error: %s", e)
+                return
+
+            temp_path = None
+            try:
+                temp_dir = tempfile.gettempdir()
+                temp_path = os.path.join(temp_dir, f"jarvis_speech_{int(time.time()*1000)}.mp3")
+                with open(temp_path, "wb") as f:
+                    f.write(audio_bytes)
+
+                pygame.mixer.music.load(temp_path)
+                pygame.mixer.music.play()
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.05)
+                pygame.mixer.music.unload()
+            except Exception as e:
+                logger.error("[PLAYBACK] pygame play error: %s", e)
+            finally:
+                if temp_path and os.path.exists(temp_path):
                     try:
-                        riff, file_size, wave = struct.unpack("<4sI4s", audio_bytes[:12])
-                        if riff == b"RIFF" and wave == b"WAVE":
-                            offset = 12
-                            data_chunk_offset = -1
-                            while offset < len(audio_bytes) - 8:
-                                chunk_id, chunk_size = struct.unpack("<4sI", audio_bytes[offset:offset+8])
-                                if chunk_id == b"data":
-                                    data_chunk_offset = offset
-                                    break
-                                if chunk_size < 0 or offset + 8 + chunk_size > len(audio_bytes):
-                                    break
-                                offset += 8 + chunk_size
-
-                            if data_chunk_offset != -1:
-                                patched_data = bytearray(audio_bytes)
-                                struct.pack_into("<I", patched_data, 4, len(audio_bytes) - 8)
-                                struct.pack_into("<I", patched_data, data_chunk_offset + 4, len(audio_bytes) - (data_chunk_offset + 8))
-                                patched_audio = bytes(patched_data)
+                        os.remove(temp_path)
+                        logger.info("[PLAYBACK] Safely deleted temp audio file: %s", temp_path)
                     except Exception as e:
-                        logger.error("[PLAYBACK] WAV patching error: %s", e)
+                        logger.error("[PLAYBACK] Failed to delete temp audio file %s: %s", temp_path, e)
+        else:
+            logger.error("[PLAYBACK] Unsupported audio format: %s", audio_format)
 
-                try:
-                    winsound.PlaySound(patched_audio, winsound.SND_MEMORY)
-                except Exception as e:
-                    logger.error("[PLAYBACK] winsound error: %s", e)
 
-            elif audio_format.lower() == "mp3":
-                try:
-                    import pygame
-                    if not pygame.mixer.get_init():
-                        pygame.mixer.init()
-                except Exception as e:
-                    logger.error("[PLAYBACK] pygame.mixer.init error: %s", e)
-                    return
-
-                temp_path = None
-                try:
-                    import pygame
-                    temp_dir = tempfile.gettempdir()
-                    temp_path = os.path.join(temp_dir, f"jarvis_speech_{int(time.time()*1000)}.mp3")
-                    with open(temp_path, "wb") as f:
-                        f.write(audio_bytes)
-
-                    pygame.mixer.music.load(temp_path)
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
-                        time.sleep(0.05)
-                    pygame.mixer.music.unload()
-                except Exception as e:
-                    logger.error("[PLAYBACK] pygame play error: %s", e)
-                finally:
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                            logger.info("[PLAYBACK] Safely deleted temp audio file: %s", temp_path)
-                        except Exception as e:
-                            logger.error("[PLAYBACK] Failed to delete temp audio file %s: %s", temp_path, e)
-            else:
-                logger.error("[PLAYBACK] Unsupported audio format: %s", audio_format)
-
-    threading.Thread(target=_play_worker, daemon=True).start()
+def play_audio_background(audio_bytes: bytes, audio_format: str) -> None:
+    """Plays audio bytes in a background daemon thread based on format (wav or mp3)."""
+    threading.Thread(target=play_audio_sync, args=(audio_bytes, audio_format), daemon=True).start()
 
 
 def _normalize(result: dict[str, Any], text: str, provider: str) -> dict[str, Any]:
@@ -173,7 +174,7 @@ class SpeechOrchestrator:
             providers.append("pyttsx3")
         return providers
 
-    def say(self, text: str, *, dry_run: bool = False) -> dict[str, Any]:
+    def say(self, text: str, *, dry_run: bool = False, blocking: bool = False) -> dict[str, Any]:
         global _LAST_TTS_ERROR, _LAST_PROVIDER_USED
         logger = _speech_logger()
 
@@ -188,7 +189,7 @@ class SpeechOrchestrator:
         # Attempt primary provider
         primary_result = None
         try:
-            primary_result = self._try_provider(primary, safe_text, dry_run)
+            primary_result = self._try_provider(primary, safe_text, dry_run, blocking=blocking)
         except Exception as e:
             logger.exception("[SPEECH] Primary provider %s raised an exception: %s", primary, e)
             primary_result = {"ok": False, "error": str(e), "status": "failed"}
@@ -208,9 +209,9 @@ class SpeechOrchestrator:
         primary_fix = None
         if primary == "fish_audio":
             if not self.settings.fish_audio_api_key or not self.settings.fish_audio_voice_id:
-                primary_fix = "Основной голос Fish Audio недоступен: отсутствует JARVIS_FISH_AUDIO_API_KEY или JARVIS_FISH_AUDIO_VOICE_ID в .env."
+                primary_fix = "Голос Джарвиса временно недоступен. Проверьте Fish Audio key / voice id / лимиты."
             else:
-                primary_fix = f"Основной голос Fish Audio недоступен. Ошибка: {last_error}. Проверьте лимиты/интернет."
+                primary_fix = f"Голос Джарвиса временно недоступен. Проверьте Fish Audio key / voice id / лимиты. (Ошибка: {last_error})"
         else:
             primary_fix = f"Основной голос {primary} недоступен. Ошибка: {last_error}."
 
@@ -235,7 +236,7 @@ class SpeechOrchestrator:
             logger.info("[SPEECH] Attempting fallback provider: %s", fallback)
             fallback_result = None
             try:
-                fallback_result = self._try_provider(fallback, safe_text, dry_run)
+                fallback_result = self._try_provider(fallback, safe_text, dry_run, blocking=blocking)
             except Exception as e:
                 logger.exception("[SPEECH] Fallback provider %s raised an exception: %s", fallback, e)
                 fallback_result = {"ok": False, "error": str(e), "status": "failed"}
@@ -258,7 +259,7 @@ class SpeechOrchestrator:
         _LAST_PROVIDER_USED = "text_only"
         return self._text_only(safe_text, "All TTS providers failed.", started, primary_fix)
 
-    def _try_provider(self, provider: str, text: str, dry_run: bool) -> dict[str, Any] | None:
+    def _try_provider(self, provider: str, text: str, dry_run: bool, blocking: bool = False) -> dict[str, Any] | None:
         logger = _speech_logger()
         if provider == "fish_audio":
             if not self.fish.available():
@@ -267,7 +268,10 @@ class SpeechOrchestrator:
                 return _normalize({"ok": True, "status": "dry_run"}, text, "fish_audio")
             synth = self.fish.synthesize(text)
             if synth["ok"]:
-                play_audio_background(synth["audio"], synth["format"])
+                if blocking:
+                    play_audio_sync(synth["audio"], synth["format"])
+                else:
+                    play_audio_background(synth["audio"], synth["format"])
                 return _normalize({**synth, "spoken": True, "played": True}, text, "fish_audio")
             return _normalize(synth, text, "fish_audio")
 
@@ -284,7 +288,10 @@ class SpeechOrchestrator:
                 return _normalize({"ok": True, "status": "dry_run"}, text, "edge_tts")
             synth = self.edge.synthesize(text)
             if synth["ok"]:
-                play_audio_background(synth["audio"], synth["format"])
+                if blocking:
+                    play_audio_sync(synth["audio"], synth["format"])
+                else:
+                    play_audio_background(synth["audio"], synth["format"])
                 return _normalize({**synth, "spoken": True, "played": True}, text, "edge_tts")
             return _normalize(synth, text, "edge_tts")
 
@@ -298,10 +305,12 @@ class SpeechOrchestrator:
         return None
 
     def _text_only(self, text: str, error: str, started: float, fix: str | None = None) -> dict[str, Any]:
+        global _LAST_PROVIDER_USED
+        _LAST_PROVIDER_USED = "text_only"
         result = _normalize(text_only_response(text), text, "text_only")
         result["error"] = error
         result["latency_ms"] = int((time.perf_counter() - started) * 1000)
-        result["fix"] = fix or "Все голосовые движки (Fish Audio, Edge TTS, pyttsx3) недоступны. Проверьте .env или установите pyttsx3 через pip."
+        result["fix"] = fix or "Голос Джарвиса временно недоступен. Проверьте Fish Audio key / voice id / лимиты."
         return result
 
     def say_greeting(self, text: str) -> dict[str, Any]:
@@ -317,17 +326,34 @@ class SpeechOrchestrator:
         return self.say(text)
 
     def status(self) -> dict[str, Any]:
+        voice_locked = self.settings.tts_require_fish_audio
+        primary = self.settings.tts_primary or "fish_audio"
+        fallback_enabled = self.settings.tts_fallback_enabled and not voice_locked
+        
+        fallback_used = False
+        if _LAST_PROVIDER_USED and _LAST_PROVIDER_USED != primary and _LAST_PROVIDER_USED != "text_only":
+            fallback_used = True
+            
+        voice_identity = "text_only"
+        if _LAST_PROVIDER_USED == "fish_audio":
+            voice_identity = "jarvis"
+        elif _LAST_PROVIDER_USED in {"resemble", "edge_tts", "pyttsx3"}:
+            voice_identity = "fallback"
+
         return {
-            "primary": self.settings.tts_primary,
+            "voice_locked": voice_locked,
+            "primary": primary,
+            "fallback_enabled": fallback_enabled,
+            "fallback_used": fallback_used,
+            "last_provider_used": _LAST_PROVIDER_USED or "none",
+            "voice_identity": voice_identity,
             "primary_ready": (
-                self.fish.available() if self.settings.tts_primary == "fish_audio"
-                else self.edge.available() if self.settings.tts_primary == "edge_tts"
-                else self.offline.available() if self.settings.tts_primary == "pyttsx3"
+                self.fish.available() if primary == "fish_audio"
+                else self.edge.available() if primary == "edge_tts"
+                else self.offline.available() if primary == "pyttsx3"
                 else False
             ),
             "fallback": self.settings.tts_fallback,
-            "fallback_enabled": self.settings.tts_fallback_enabled,
             "available_providers": self.available_providers(),
-            "last_provider_used": _LAST_PROVIDER_USED,
             "last_error": _LAST_TTS_ERROR,
         }

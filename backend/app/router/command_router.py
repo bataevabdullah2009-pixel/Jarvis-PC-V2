@@ -52,12 +52,15 @@ class CommandRouter:
         context = context or {}
         dry_run = bool(context.get("dry_run", False))
         self._tts_wait = bool(context.get("tts_wait", False) or context.get("wait_for_tts", False))
+        self._skip_tts = not context.get("speak", True)
         self._openrouter_called = False
         self._local_matched = False
         command_id = f"cmd_{uuid4().hex[:12]}"
         started = time.perf_counter()
-        normalized = normalize_text(text)
         pipeline_logger = _pipeline_logger()
+
+        intent_started = time.perf_counter()
+        normalized = normalize_text(text)
 
         logger.info("command received id=%s source=%s normalized=%s", command_id, source, normalized)
         pipeline_logger.info("[PIPELINE] user_text=%s", text)
@@ -65,6 +68,7 @@ class CommandRouter:
         event_bus.emit("assistant.command.received", {"command_id": command_id, "source": source})
 
         if not normalized:
+            intent_ms = int((time.perf_counter() - intent_started) * 1000)
             return self._finalize(
                 command_id=command_id,
                 route="validation",
@@ -76,14 +80,19 @@ class CommandRouter:
                 tts_dry_run=dry_run,
                 started=started,
                 router_ms=self._elapsed(started),
+                intent_ms=intent_ms,
             )
 
-        route_started = time.perf_counter()
         scenario_match = match_scenario(normalized)
         if scenario_match:
             self._local_matched = True
+            intent_ms = int((time.perf_counter() - intent_started) * 1000)
+            
+            local_started = time.perf_counter()
             result = self._run_scenario(scenario_match.name, dry_run=dry_run)
-            router_ms = int((time.perf_counter() - route_started) * 1000)
+            local_command_ms = int((time.perf_counter() - local_started) * 1000)
+            
+            router_ms = intent_ms
             pipeline_logger.info("[PIPELINE] route=scenario")
             pipeline_logger.info("[PIPELINE] is_local=true")
             pipeline_logger.info("[PIPELINE] local_matched=true")
@@ -100,13 +109,20 @@ class CommandRouter:
                 tts_dry_run=dry_run,
                 started=started,
                 router_ms=router_ms,
+                intent_ms=intent_ms,
+                local_command_ms=local_command_ms,
             )
 
         local_command = self._match_local_command(normalized)
         if local_command:
             self._local_matched = True
+            intent_ms = int((time.perf_counter() - intent_started) * 1000)
+            
+            local_started = time.perf_counter()
             result = self._run_local_command(local_command, dry_run=dry_run)
-            router_ms = int((time.perf_counter() - route_started) * 1000)
+            local_command_ms = int((time.perf_counter() - local_started) * 1000)
+            
+            router_ms = intent_ms
             pipeline_logger.info("[PIPELINE] route=local_command")
             pipeline_logger.info("[PIPELINE] is_local=true")
             pipeline_logger.info("[PIPELINE] local_matched=true")
@@ -122,19 +138,25 @@ class CommandRouter:
                 tts_dry_run=dry_run,
                 started=started,
                 router_ms=router_ms,
+                intent_ms=intent_ms,
+                local_command_ms=local_command_ms,
             )
 
         app_name = match_open_app(normalized)
         if app_name:
             self._local_matched = True
+            intent_ms = int((time.perf_counter() - intent_started) * 1000)
             action = {"type": "open_app", "target": app_name}
             decision = self.safety.validate(action)
-            router_ms = int((time.perf_counter() - route_started) * 1000)
+            
+            local_started = time.perf_counter()
+            router_ms = intent_ms
             pipeline_logger.info("[PIPELINE] route=local_command")
             pipeline_logger.info("[PIPELINE] is_local=true")
             pipeline_logger.info("[PIPELINE] local_matched=true")
             pipeline_logger.info("[OPENROUTER] called=false reason=open_app")
             if decision.requires_confirmation or decision.forbidden:
+                local_command_ms = int((time.perf_counter() - local_started) * 1000)
                 return self._finalize(
                     command_id=command_id,
                     route="local_command",
@@ -147,9 +169,12 @@ class CommandRouter:
                     tts_dry_run=dry_run,
                     started=started,
                     router_ms=router_ms,
+                    intent_ms=intent_ms,
+                    local_command_ms=local_command_ms,
                 )
 
             opened = open_app(app_name, self.settings, dry_run=dry_run)
+            local_command_ms = int((time.perf_counter() - local_started) * 1000)
             status_text = "Открываю, сэр." if opened["status"] in {"completed", "dry_run"} else opened.get("message", "Не удалось открыть приложение.")
             return self._finalize(
                 command_id=command_id,
@@ -162,15 +187,24 @@ class CommandRouter:
                 tts_dry_run=dry_run,
                 started=started,
                 router_ms=router_ms,
+                intent_ms=intent_ms,
+                local_command_ms=local_command_ms,
             )
 
+        # AI fallback path: no local command matched
+        intent_ms = int((time.perf_counter() - intent_started) * 1000)
         pipeline_logger.info("[PIPELINE] route=ai_fallback")
         pipeline_logger.info("[PIPELINE] is_local=false")
         pipeline_logger.info("[PIPELINE] local_matched=false")
+        
         ai_started = time.perf_counter()
-        plan = self.ai_planner.plan(text)
+        try:
+            plan = self.ai_planner.plan(text, context)
+        except TypeError:
+            plan = self.ai_planner.plan(text)
         self._openrouter_called = bool(plan.openrouter_called)
         ai_ms = plan.latency_ms if plan.latency_ms is not None else int((time.perf_counter() - ai_started) * 1000)
+        
         pipeline_logger.info("[OPENROUTER] called=%s", plan.openrouter_called)
         pipeline_logger.info("[OPENROUTER] url=%s", plan.endpoint)
         pipeline_logger.info("[OPENROUTER] model=%s", plan.model or self.settings.openrouter_model)
@@ -178,6 +212,7 @@ class CommandRouter:
         pipeline_logger.info("[OPENROUTER] response_text_preview=%s", plan.response_text_preview)
         pipeline_logger.info("[OPENROUTER] raw_response_preview=%s", plan.raw_response_preview)
         pipeline_logger.info("[OPENROUTER] error=%s", plan.error_message or plan.error)
+        
         if plan.status in {"answered", "fallback"}:
             return self._finalize(
                 command_id=command_id,
@@ -193,8 +228,10 @@ class CommandRouter:
                 },
                 tts_dry_run=dry_run,
                 started=started,
-                router_ms=int((ai_started - route_started) * 1000),
+                router_ms=intent_ms,
                 ai_ms=ai_ms,
+                intent_ms=intent_ms,
+                openrouter_ms=ai_ms,
             )
 
         fallback_ans = plan.answer_text or "Сэр, AI-мозг пока недоступен, но локальные команды работают."
@@ -233,8 +270,10 @@ class CommandRouter:
             tts_dry_run=dry_run,
             skip_tts=False,
             started=started,
-            router_ms=int((ai_started - route_started) * 1000),
+            router_ms=intent_ms,
             ai_ms=ai_ms,
+            intent_ms=intent_ms,
+            openrouter_ms=ai_ms,
         )
 
     def _match_local_command(self, normalized_text: str) -> dict[str, Any] | None:
@@ -311,9 +350,19 @@ class CommandRouter:
         extra: dict[str, Any] | None = None,
         tts_dry_run: bool = False,
         skip_tts: bool = False,
+        intent_ms: int = 0,
+        local_command_ms: int = 0,
+        openrouter_ms: int = 0,
     ) -> dict[str, Any]:
         safe_text = (response_text or "").strip() or "Команда выполнена."
         tts_started = time.perf_counter()
+
+        skip_tts = skip_tts or self._skip_tts
+        tts_enqueue_ms = 0
+        tts_generate_ms = 0
+        tts_playback_started_ms = 0
+        tts_ms = 0
+
         if skip_tts:
             tts_result = {
                 "mode": "none",
@@ -328,32 +377,45 @@ class CommandRouter:
                 "status_code": None,
                 "audio_bytes": 0,
                 "fallback_used": False,
-                "error": "Skipped because OpenRouter did not return speakable text.",
+                "error": "Skipped because speak was disabled.",
                 "latency_ms": 0,
                 "text": safe_text[:500],
             }
-            tts_ms = 0
         elif not self._tts_wait and not tts_dry_run:
             tts_result = self._queued_tts_result(safe_text)
-            tts_ms = 0
-            threading.Thread(
-                target=self._run_tts_background,
-                args=(command_id, route, safe_text),
-                daemon=True
-            ).start()
+            enqueue_started = time.perf_counter()
+            
+            from app.voice.speech_queue import speech_queue
+            speech_queue.submit(command_id, route, safe_text, self.tts)
+            
+            tts_enqueue_ms = int((time.perf_counter() - enqueue_started) * 1000)
         else:
+            # Synchronous generate & playback
             tts_result = self.tts.speak(safe_text, dry_run=tts_dry_run)
             tts_ms = int((time.perf_counter() - tts_started) * 1000)
             if tts_result.get("latency_ms") is None:
                 tts_result["latency_ms"] = tts_ms
-        total_ms = int((time.perf_counter() - started) * 1000)
+            
+            tts_generate_ms = tts_result["latency_ms"]
+            tts_playback_started_ms = tts_generate_ms
+
+        total_response_ms = int((time.perf_counter() - started) * 1000)
         status = "blocked" if forbidden else "requires_confirmation" if requires_confirmation else "completed"
+        
         latency = {
             "router_ms": router_ms,
             "ai_ms": ai_ms,
             "tts_ms": int(tts_result.get("latency_ms") or tts_ms),
-            "total_ms": total_ms,
+            "total_ms": total_response_ms,
+            "intent_ms": intent_ms,
+            "local_command_ms": local_command_ms,
+            "openrouter_ms": openrouter_ms,
+            "tts_enqueue_ms": tts_enqueue_ms,
+            "tts_generate_ms": tts_generate_ms,
+            "tts_playback_started_ms": tts_playback_started_ms,
+            "total_response_ms": total_response_ms
         }
+        
         result: dict[str, Any] = {
             "command_id": command_id,
             "ok": status == "completed",
@@ -386,6 +448,7 @@ class CommandRouter:
         pipeline_logger.info("[PIPELINE] local_matched=%s", self._local_matched)
         pipeline_logger.info("[PIPELINE] provider=%s", provider)
         pipeline_logger.info("[OPENROUTER] called=%s", self._openrouter_called)
+        
         plan_log = extra.get("plan") if extra else None
         pipeline_logger.info("[OPENROUTER] url=%s", plan_log.get("endpoint") if isinstance(plan_log, dict) else None)
         pipeline_logger.info("[OPENROUTER] model=%s", (plan_log.get("model") if isinstance(plan_log, dict) else None) or (extra.get("model") if extra else None))
@@ -431,42 +494,6 @@ class CommandRouter:
             "latency_ms": 0,
             "text": text[:500],
         }
-
-    def _run_tts_background(self, command_id: str, route: str, text: str) -> None:
-        pipeline_logger = _pipeline_logger()
-        started = time.perf_counter()
-        pipeline_logger.info("[TTS] async_start command_id=%s provider=fish_audio", command_id)
-        result = self.tts.speak(text, dry_run=False)
-        latency_ms = result.get("latency_ms") or int((time.perf_counter() - started) * 1000)
-        pipeline_logger.info(
-            "[FISH] async command_id=%s status_code=%s latency_ms=%s audio_bytes=%s error=%s",
-            command_id,
-            result.get("status_code"),
-            latency_ms,
-            result.get("audio_bytes"),
-            result.get("error"),
-        )
-        pipeline_logger.info(
-            "[TTS] async_complete command_id=%s provider=%s fallback_used=%s played=%s error=%s",
-            command_id,
-            result.get("provider"),
-            result.get("fallback_used"),
-            result.get("played"),
-            result.get("error"),
-        )
-        event_bus.emit(
-            "assistant.tts.completed" if result.get("ok") else "assistant.tts.failed",
-            {
-                "command_id": command_id,
-                "route": route,
-                "provider": result.get("provider"),
-                "status": result.get("status"),
-                "played": bool(result.get("played")),
-                "error": result.get("error"),
-                "warning": result.get("warning"),
-                "latency_ms": latency_ms,
-            },
-        )
 
     @staticmethod
     def _elapsed(started: float) -> int:
