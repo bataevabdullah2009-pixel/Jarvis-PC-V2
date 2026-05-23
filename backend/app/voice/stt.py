@@ -32,6 +32,30 @@ def stt_dependency_status(settings: Settings) -> dict[str, Any]:
     }
 
 
+def stt_status(settings: Settings) -> dict[str, Any]:
+    vosk_available = importlib.util.find_spec("vosk") is not None
+    model_path = _resolve_model_path(settings)
+    model_exists = model_path.exists()
+    configured = vosk_available and model_exists
+
+    fixes = []
+    if not vosk_available:
+        fixes.append("Установите vosk: pip install vosk")
+    if not model_exists:
+        fixes.append(f"Скачайте модель Vosk (например, vosk-model-small-ru-0.22) и распакуйте её в папку: {model_path}")
+
+    return {
+        "provider": settings.stt_provider,
+        "vosk_available": vosk_available,
+        "model_path": str(model_path),
+        "model_exists": model_exists,
+        "configured": configured,
+        "language": "ru",
+        "fixes": fixes,
+    }
+
+
+
 class STTService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings

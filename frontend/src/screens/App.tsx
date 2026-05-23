@@ -236,10 +236,16 @@ export function App() {
     await sendCommand(commandByScenario[name]);
   };
 
-  const recordVoice = async () => {
+  const recordVoice = async (deviceId?: string) => {
+    const devId = deviceId ?? localStorage.getItem("selected_device_id") ?? "default";
     playSound("listening");
-    setState((current) => ({ ...current, assistantStatus: "listening", statusText: "Слушаю", lastError: null }));
-    const response = await api.recordCommand();
+    setState((current) => ({
+      ...current,
+      assistantStatus: "listening",
+      statusText: "Слушаю 5 секунд...",
+      lastError: null
+    }));
+    const response = await api.recordCommand(devId, 5);
     if (!response.ok || !response.data) {
       setState((current) => ({
         ...current,
@@ -251,8 +257,44 @@ export function App() {
       return;
     }
 
-    const transcript = response.data.transcript?.trim();
-    const assistantResult = response.data.assistant_result;
+    const data = response.data;
+    const finalStatus = data.final_status;
+
+    if (finalStatus === "no_audio") {
+      setState((current) => ({
+        ...current,
+        assistantStatus: "error",
+        statusText: "Тишина",
+        lastError: data.stt?.fix || "Микрофон не получает звук. Проверьте громкость и подключение."
+      }));
+      playSound("error");
+      return;
+    }
+
+    if (finalStatus === "stt_not_configured") {
+      setState((current) => ({
+        ...current,
+        assistantStatus: "error",
+        statusText: "Ошибка STT",
+        lastError: data.stt?.fix || "Микрофон слышит, но STT не настроен."
+      }));
+      playSound("error");
+      return;
+    }
+
+    if (finalStatus === "empty_transcript") {
+      setState((current) => ({
+        ...current,
+        assistantStatus: "warning",
+        statusText: "Не распознано",
+        lastError: data.stt?.fix || "Речь не распознана. Говорите громче и чётче."
+      }));
+      playSound("error");
+      return;
+    }
+
+    const transcript = data.stt?.transcript?.trim();
+    const assistantResult = data.assistant_result;
     if (transcript && assistantResult) {
       playSound("command_received");
       applyCommandResult(transcript, assistantResult);
@@ -268,15 +310,16 @@ export function App() {
       ...current,
       assistantStatus: "error",
       statusText: "Ошибка",
-      lastError: "STT не вернул текст команды"
+      lastError: "STT сработал, но текст пустой"
     }));
     playSound("error");
   };
 
-  const testMicrophone = async () => {
+  const testMicrophone = async (deviceId?: string) => {
+    const devId = deviceId ?? localStorage.getItem("selected_device_id") ?? "default";
     playSound("listening");
-    setState((current) => ({ ...current, assistantStatus: "listening", statusText: "Слушаю", lastError: null }));
-    const response = await api.testMicrophone();
+    setState((current) => ({ ...current, assistantStatus: "listening", statusText: "Слушаю 3 секунды...", lastError: null }));
+    const response = await api.testMicrophone(devId);
     if (!response.ok || !response.data) {
       setState((current) => ({
         ...current,
@@ -294,7 +337,7 @@ export function App() {
       assistantStatus: data.heard_signal ? "ready" : "error",
       statusText: data.heard_signal ? "Готов" : "Ошибка",
       lastMicrophoneTest: data,
-      lastError: data.heard_signal ? null : `Сигнал слишком тихий. RMS ${data.rms.toFixed(5)}`
+      lastError: data.heard_signal ? null : `Сигнал слишком тихий. RMS ${data.rms.toFixed(5)}. Проверьте выбранный микрофон.`
     }));
     playSound(data.heard_signal ? "success" : "error");
   };

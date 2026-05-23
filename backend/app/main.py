@@ -86,6 +86,12 @@ class MicrophoneTestRequest(BaseModel):
     duration_seconds: float = Field(default=3, gt=0, le=30)
 
 
+class TestCaptureRequest(BaseModel):
+    device_id: str = "default"
+    duration_seconds: float = Field(default=3, gt=0, le=30)
+
+
+
 class RecordCommandRequest(BaseModel):
     device_id: str = "default"
     max_seconds: float = Field(default=8, gt=0, le=30)
@@ -485,6 +491,61 @@ def voice_devices() -> dict[str, Any]:
         return envelope(None, ok=False, error=voice_error_response(exc))
 
 
+@app.get("/voice/mic-diagnostics")
+def voice_mic_diagnostics() -> dict[str, Any]:
+    from app.voice.microphone import mic_diagnostics
+    return envelope(mic_diagnostics())
+
+
+@app.post("/voice/test-capture")
+def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
+    from app.voice.microphone import capture_audio, VoiceDependencyError
+    try:
+        capture = capture_audio(
+            device_id=request.device_id,
+            duration_seconds=request.duration_seconds,
+        )
+        rms = capture.rms
+        peak = capture.peak
+        heard = rms > 0.005 or peak > 0.02
+        fix_msg = None
+        if not heard:
+            fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
+        return {
+            "ok": True,
+            "device_id": request.device_id,
+            "sample_rate": capture.sample_rate,
+            "channels": capture.channels,
+            "rms": rms,
+            "peak": peak,
+            "heard_signal": heard,
+            "error_type": None,
+            "fix": fix_msg
+        }
+    except Exception as exc:
+        error_code = getattr(exc, "code", "CAPTURE_FAILED")
+        fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
+        if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
+            fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
+        return {
+            "ok": False,
+            "device_id": request.device_id,
+            "sample_rate": 16000,
+            "channels": 1,
+            "rms": 0.0,
+            "peak": 0.0,
+            "heard_signal": False,
+            "error_type": error_code,
+            "fix": fix_msg
+        }
+
+
+@app.get("/voice/stt-status")
+def voice_stt_status() -> dict[str, Any]:
+    from app.voice.stt import stt_status
+    return stt_status(get_settings())
+
+
 @app.post("/voice/test-microphone")
 def voice_test_microphone(request: MicrophoneTestRequest) -> dict[str, Any]:
     event_bus.emit("voice.microphone.test.started", {"device_id": request.device_id})
@@ -516,11 +577,12 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
         event_bus.emit("voice.error", {"code": exc.code})
         return envelope(None, ok=False, error=voice_error_response(exc))
 
+    transcript = result.get("stt", {}).get("transcript") if isinstance(result.get("stt"), dict) else result.get("transcript")
     event_bus.emit(
         "voice.recording.completed",
-        {"device_id": request.device_id, "transcript_available": bool(result.get("transcript"))},
+        {"device_id": request.device_id, "transcript_available": bool(transcript)},
     )
-    return envelope(result)
+    return envelope(result, ok=result.get("ok", True))
 
 
 @app.post("/voice/start-listener")

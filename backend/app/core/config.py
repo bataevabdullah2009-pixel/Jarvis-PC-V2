@@ -275,6 +275,7 @@ class Settings:
     license_enabled: bool = False
     offline_mode: bool = False
     vosk_model_path: str = "backend\\models\\vosk-model-small-ru-0.22"
+    stt_provider: str = "vosk"
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-4o-mini"
     groq_api_key: str | None = None
@@ -322,6 +323,8 @@ class Settings:
         load_environment()
         data = _read_json(CONFIG_DIR / "settings.json", {})
         settings = cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
+        settings.vosk_model_path = env_value("JARVIS_VOSK_MODEL_PATH", "VOSK_MODEL_PATH", default=settings.vosk_model_path) or settings.vosk_model_path
+        settings.stt_provider = env_value("JARVIS_STT_PROVIDER", default=settings.stt_provider) or settings.stt_provider
         settings.openrouter_api_key = env_value("JARVIS_OPENROUTER_API_KEY", "OPENROUTER_API_KEY")
         settings.openrouter_model = env_value("JARVIS_OPENROUTER_MODEL", "OPENROUTER_MODEL", default=settings.openrouter_model) or settings.openrouter_model
         settings.groq_api_key = env_value("JARVIS_GROQ_API_KEY", "GROQ_API_KEY")
@@ -397,6 +400,7 @@ class Settings:
             "license_enabled": False,
             "offline_mode": self.offline_mode,
             "vosk_model_path": self.vosk_model_path,
+            "stt_provider": self.stt_provider,
             "openrouter_configured": bool(self.openrouter_api_key),
             "groq_configured": bool(self.groq_api_key),
             "fish_audio_configured": bool(self.fish_audio_api_key),

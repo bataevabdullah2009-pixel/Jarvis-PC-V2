@@ -42,8 +42,8 @@ type Props = {
   onScreen: (screen: Screen) => void;
   onCommand: (text: string) => Promise<void>;
   onScenario: (name: "welcome-home" | "news" | "workspace") => Promise<void>;
-  onRecordVoice: () => Promise<void>;
-  onTestMicrophone: () => Promise<void>;
+  onRecordVoice: (deviceId?: string) => Promise<void>;
+  onTestMicrophone: (deviceId?: string) => Promise<void>;
   onTestVoice: () => Promise<void>;
   onTestOpenRouter: () => Promise<void>;
   onTestFishAudio: () => Promise<void>;
@@ -93,6 +93,13 @@ export function MinimalUI({
   const [command, setCommand] = useState("");
   const [localSettings, setLocalSettings] = useState<LocalSettings>(() => loadLocalSettings());
   const [savedText, setSavedText] = useState("Сохранено локально");
+  const [selectedDevice, setSelectedDevice] = useState(() => localStorage.getItem("selected_device_id") || "default");
+
+  const handleDeviceChange = (deviceId: string) => {
+    setSelectedDevice(deviceId);
+    localStorage.setItem("selected_device_id", deviceId);
+  };
+
 
   const latency = state.lastResult?.latency;
   const ttsGenerateMs = latency?.tts_generate_ms ?? latency?.tts_ms ?? null;
@@ -338,7 +345,7 @@ export function MinimalUI({
                 <button type="submit" title="Отправить">
                   <Send size={18} />
                 </button>
-                <button type="button" onClick={onRecordVoice} title="Микрофон">
+                <button type="button" onClick={() => onRecordVoice(selectedDevice)} title="Микрофон">
                   <Mic size={18} />
                 </button>
               </form>
@@ -349,7 +356,7 @@ export function MinimalUI({
                     key={item}
                     type="button"
                     onClick={() => {
-                      if (item === "Проверить микрофон") onTestMicrophone();
+                      if (item === "Проверить микрофон") onTestMicrophone(selectedDevice);
                       else if (item === "Проверить голос") onTestVoice();
                       else if (item === "Добавить команду") onScreen("myCommands");
                       else onCommand(item);
@@ -361,16 +368,30 @@ export function MinimalUI({
               </div>
             </section>
 
-            <ControlPanel state={state} onPatchSettings={onPatchSettings} onRefresh={onRefresh} />
+            <ControlPanel
+              state={state}
+              onPatchSettings={onPatchSettings}
+              onRefresh={onRefresh}
+              selectedDevice={selectedDevice}
+              onDeviceChange={handleDeviceChange}
+            />
           </section>
-        )}
-
-        {state.screen === "commands" && <CommandsPanel state={state} />}
-        {state.screen === "scenarios" && (
-          <ScenariosPanel settings={localSettings} onChange={updateLocal} onScenario={onScenario} savedText={savedText} />
-        )}
-        {state.screen === "myCommands" && <MyCommandsPanel state={state} />}
-        {state.screen === "voices" && <VoicesPanel state={state} onTestMicrophone={onTestMicrophone} onTestVoice={onTestVoice} />}
+         )}
+ 
+         {state.screen === "commands" && <CommandsPanel state={state} />}
+         {state.screen === "scenarios" && (
+           <ScenariosPanel settings={localSettings} onChange={updateLocal} onScenario={onScenario} savedText={savedText} />
+         )}
+         {state.screen === "myCommands" && <MyCommandsPanel state={state} />}
+         {state.screen === "voices" && (
+           <VoicesPanel
+             state={state}
+             onTestMicrophone={onTestMicrophone}
+             onTestVoice={onTestVoice}
+             selectedDevice={selectedDevice}
+             onDeviceChange={handleDeviceChange}
+           />
+         )}
         {state.screen === "environment" && (
           <section className="panel page-panel">
             <ScenarioHeader title="Моя рабочая среда" icon={<FolderOpen size={18} />} savedText={savedText} />
@@ -416,7 +437,19 @@ export function MinimalUI({
   );
 }
 
-function ControlPanel({ state, onPatchSettings, onRefresh }: { state: AppState; onPatchSettings: Props["onPatchSettings"]; onRefresh: Props["onRefresh"] }) {
+function ControlPanel({
+  state,
+  onPatchSettings,
+  onRefresh,
+  selectedDevice,
+  onDeviceChange
+}: {
+  state: AppState;
+  onPatchSettings: Props["onPatchSettings"];
+  onRefresh: Props["onRefresh"];
+  selectedDevice: string;
+  onDeviceChange: (id: string) => void;
+}) {
   const settings = state.settings;
   const runtimeMode = settings?.runtime_mode ?? (settings?.offline_mode ? "offline" : "hybrid");
 
@@ -426,9 +459,35 @@ function ControlPanel({ state, onPatchSettings, onRefresh }: { state: AppState; 
         <SlidersHorizontal size={18} />
         <h2>Панель управления</h2>
       </div>
-      <ToggleRow label="Голосовое пробуждение" checked={Boolean(settings?.voice_wake_enabled)} onChange={(value) => onPatchSettings({ voice_wake_enabled: value })} />
-      <ToggleRow label="Хлопок" checked={Boolean(settings?.clap_enabled)} onChange={(value) => onPatchSettings({ clap_enabled: value })} />
+      <ToggleRow label="Голосовое пробуждение (Preview)" checked={Boolean(settings?.voice_wake_enabled)} onChange={(value) => onPatchSettings({ voice_wake_enabled: value })} />
+      <ToggleRow label="Хлопок (Preview)" checked={Boolean(settings?.clap_enabled)} onChange={(value) => onPatchSettings({ clap_enabled: value })} />
+      {(settings?.voice_wake_enabled || settings?.clap_enabled) && (
+        <div style={{
+          marginTop: "4px",
+          marginBottom: "12px",
+          padding: "6px 10px",
+          background: "rgba(255, 179, 0, 0.1)",
+          border: "1px solid rgba(255, 179, 0, 0.2)",
+          borderRadius: "6px",
+          fontSize: "0.8rem",
+          color: "#FFE054",
+          textAlign: "center"
+        }}>
+          ⚠️ Live listener ещё не активен (только one-shot)
+        </div>
+      )}
       <ToggleRow label="Автозапуск" checked={Boolean(settings?.autostart_enabled)} onChange={(value) => onPatchSettings({ autostart_enabled: value })} />
+      <label className="field-row">
+        <span>Микрофон</span>
+        <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)}>
+          <option value="default">По умолчанию (Default)</option>
+          {state.devices.map((dev) => (
+            <option key={dev.id} value={dev.id}>
+              {dev.name}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="field-row">
         <span>Режим</span>
         <select value={runtimeMode} onChange={(event) => onPatchSettings({ runtime_mode: event.target.value as SettingsData["runtime_mode"] })}>
@@ -724,7 +783,19 @@ function NewsEditor({ settings, onChange, onTest }: { settings: LocalSettings; o
   );
 }
 
-function VoicesPanel({ state, onTestMicrophone, onTestVoice }: { state: AppState; onTestMicrophone: Props["onTestMicrophone"]; onTestVoice: Props["onTestVoice"] }) {
+function VoicesPanel({
+  state,
+  onTestMicrophone,
+  onTestVoice,
+  selectedDevice,
+  onDeviceChange
+}: {
+  state: AppState;
+  onTestMicrophone: Props["onTestMicrophone"];
+  onTestVoice: Props["onTestVoice"];
+  selectedDevice: string;
+  onDeviceChange: (id: string) => void;
+}) {
   return (
     <section className="panel page-panel">
       <div className="panel-heading">
@@ -738,7 +809,18 @@ function VoicesPanel({ state, onTestMicrophone, onTestVoice }: { state: AppState
         <InfoCard label="TTS" value={state.ttsStatus?.primary ?? state.voice?.tts.mode ?? "text only"} />
         <InfoCard label="Jarvis voice" value={state.settings?.fish_audio_voice_configured ? "Fish Audio voice id" : "Fish Audio unavailable"} />
       </div>
-      <button className="wide-button" type="button" onClick={onTestMicrophone}>
+      <label className="field-row" style={{ marginTop: "16px", marginBottom: "16px" }}>
+        <span>Выбор микрофона</span>
+        <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)} style={{ width: "100%" }}>
+          <option value="default">По умолчанию (Default)</option>
+          {state.devices.map((dev) => (
+            <option key={dev.id} value={dev.id}>
+              {dev.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="wide-button" type="button" onClick={() => onTestMicrophone(selectedDevice)}>
         <Mic size={17} />
         Проверить микрофон
       </button>

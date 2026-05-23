@@ -145,6 +145,58 @@ export type MicrophoneTestData = {
   heard_signal: boolean;
 };
 
+export type RecordCommandResponse = {
+  ok: boolean;
+  capture: {
+    ok: boolean;
+    rms: number;
+    peak: number;
+    heard_signal: boolean;
+  };
+  stt: {
+    configured: boolean;
+    provider: string | null;
+    transcript: string | null;
+    error_type: string | null;
+    fix: string | null;
+  };
+  assistant_result: CommandResult | null;
+  final_status: "recorded" | "no_audio" | "stt_not_configured" | "empty_transcript" | "sent_to_assistant";
+};
+
+export type MicDiagnosticsData = {
+  sounddevice_available: boolean;
+  numpy_available: boolean;
+  default_input_device: VoiceDevice | null;
+  input_devices: VoiceDevice[];
+  windows_hint: string;
+  can_record: boolean;
+  fixes: string[];
+};
+
+export type TestCaptureData = {
+  ok: boolean;
+  device_id: string;
+  sample_rate: number;
+  channels: number;
+  rms: number;
+  peak: number;
+  heard_signal: boolean;
+  error_type: string | null;
+  fix: string | null;
+};
+
+export type SttStatusData = {
+  provider: string;
+  vosk_available: boolean;
+  model_path: string;
+  model_exists: boolean;
+  configured: boolean;
+  language: string;
+  fixes: string[];
+};
+
+
 export type SettingsData = {
   app_name: string;
   version: string;
@@ -388,21 +440,23 @@ export const api = {
       body: JSON.stringify({ text })
     }),
   voiceDevices: () => request<{ input_devices: VoiceDevice[] }>("/voice/devices"),
-  testMicrophone: () =>
+  testMicrophone: (deviceId?: string) =>
     request<MicrophoneTestData>("/voice/test-microphone", {
       method: "POST",
-      body: JSON.stringify({ device_id: "default", duration_seconds: 1 })
+      body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: 3 })
     }),
-  recordCommand: () =>
-    request<{
-      transcript: string | null;
-      rms: number | null;
-      peak: number | null;
-      assistant_result: CommandResult | null;
-    }>("/voice/record-command", {
+  recordCommand: (deviceId?: string, maxSeconds?: number) =>
+    request<RecordCommandResponse>("/voice/record-command", {
       method: "POST",
-      body: JSON.stringify({ device_id: "default", max_seconds: 4, send_to_assistant: true })
+      body: JSON.stringify({ device_id: deviceId ?? "default", max_seconds: maxSeconds ?? 5, send_to_assistant: true })
     }),
+  micDiagnostics: () => request<MicDiagnosticsData>("/voice/mic-diagnostics"),
+  testCapture: (deviceId?: string, durationSeconds?: number) =>
+    request<TestCaptureData>("/voice/test-capture", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: durationSeconds ?? 3 })
+    }),
+  sttStatus: () => request<SttStatusData>("/voice/stt-status"),
   sendCommand: (text: string) =>
     request<CommandResult>("/assistant/ask", {
       method: "POST",

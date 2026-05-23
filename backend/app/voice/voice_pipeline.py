@@ -55,21 +55,126 @@ class VoicePipeline:
                     context={"dry_run": dry_run},
                 )
             return {
-                "device_id": device_id,
-                "duration_seconds": 0,
-                "rms": None,
-                "peak": None,
+                "ok": True,
                 "transcript": text_override,
-                "stt": {"configured": True, "provider": "text_override"},
+                "capture": {
+                    "ok": True,
+                    "rms": 0.1,
+                    "peak": 0.1,
+                    "heard_signal": True
+                },
+                "stt": {
+                    "configured": True,
+                    "provider": "text_override",
+                    "transcript": text_override,
+                    "error_type": None,
+                    "fix": None
+                },
                 "assistant_result": assistant_result,
+                "final_status": "sent_to_assistant" if send_to_assistant else "recorded",
             }
 
-        capture = capture_audio(device_id=device_id, duration_seconds=max_seconds)
+        try:
+            capture = capture_audio(device_id=device_id, duration_seconds=max_seconds)
+            rms = capture.rms
+            peak = capture.peak
+            heard_signal = rms > 0.005 or peak > 0.02
+        except Exception as exc:
+            error_code = getattr(exc, "code", "CAPTURE_FAILED")
+            fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
+            if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
+                fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
+            return {
+                "ok": False,
+                "transcript": None,
+                "capture": {
+                    "ok": False,
+                    "rms": 0.0,
+                    "peak": 0.0,
+                    "heard_signal": False
+                },
+                "stt": {
+                    "configured": False,
+                    "provider": None,
+                    "transcript": None,
+                    "error_type": error_code,
+                    "fix": fix_msg
+                },
+                "assistant_result": None,
+                "final_status": "no_audio"
+            }
+
+        if not heard_signal:
+            return {
+                "ok": False,
+                "transcript": None,
+                "capture": {
+                    "ok": True,
+                    "rms": rms,
+                    "peak": peak,
+                    "heard_signal": False
+                },
+                "stt": {
+                    "configured": False,
+                    "provider": None,
+                    "transcript": None,
+                    "error_type": "NO_AUDIO_HEARD",
+                    "fix": "Микрофон не получает звук. Проверьте выбранный микрофон, уровень громкости, доступ Windows к микрофону."
+                },
+                "assistant_result": None,
+                "final_status": "no_audio"
+            }
+
+        stt_status_dict = stt_dependency_status(self.settings)
+        if not stt_status_dict["configured"]:
+            from app.voice.stt import _resolve_model_path
+            model_path = _resolve_model_path(self.settings)
+            return {
+                "ok": False,
+                "transcript": None,
+                "capture": {
+                    "ok": True,
+                    "rms": rms,
+                    "peak": peak,
+                    "heard_signal": True
+                },
+                "stt": {
+                    "configured": False,
+                    "provider": "vosk",
+                    "transcript": None,
+                    "error_type": "STT_NOT_CONFIGURED",
+                    "fix": f"Модель Vosk не найдена. Распакуйте модель в папку: {model_path}"
+                },
+                "assistant_result": None,
+                "final_status": "stt_not_configured"
+            }
+
         stt_result = self.stt.transcribe(capture)
         transcript = stt_result.get("transcript")
-        assistant_result = None
 
-        if transcript and send_to_assistant:
+        if not transcript:
+            return {
+                "ok": False,
+                "transcript": None,
+                "capture": {
+                    "ok": True,
+                    "rms": rms,
+                    "peak": peak,
+                    "heard_signal": True
+                },
+                "stt": {
+                    "configured": True,
+                    "provider": "vosk",
+                    "transcript": None,
+                    "error_type": "EMPTY_TRANSCRIPT",
+                    "fix": "Речь не распознана. Попробуйте говорить ближе к микрофону и чётче."
+                },
+                "assistant_result": None,
+                "final_status": "empty_transcript"
+            }
+
+        assistant_result = None
+        if send_to_assistant:
             assistant_result = CommandRouter(self.settings).handle(
                 str(transcript),
                 source="voice",
@@ -77,15 +182,23 @@ class VoicePipeline:
             )
 
         return {
-            "device_id": device_id,
-            "duration_seconds": max_seconds,
-            "sample_rate": capture.sample_rate,
-            "channels": capture.channels,
-            "rms": capture.rms,
-            "peak": capture.peak,
+            "ok": True,
             "transcript": transcript,
-            "stt": stt_result,
+            "capture": {
+                "ok": True,
+                "rms": rms,
+                "peak": peak,
+                "heard_signal": True
+            },
+            "stt": {
+                "configured": True,
+                "provider": "vosk",
+                "transcript": transcript,
+                "error_type": None,
+                "fix": None
+            },
             "assistant_result": assistant_result,
+            "final_status": "sent_to_assistant" if send_to_assistant else "recorded"
         }
 
     def start_listener(self, *, wake_word: bool = True, clap: bool = True, device_id: str = "default") -> dict[str, Any]:

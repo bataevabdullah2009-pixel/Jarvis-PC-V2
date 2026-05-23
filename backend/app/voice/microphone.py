@@ -136,3 +136,56 @@ def test_microphone(device_id: str | None = "default", duration_seconds: float =
         "peak": capture.peak,
         "heard_signal": capture.rms > 0.005 or capture.peak > 0.02,
     }
+
+
+def mic_diagnostics() -> dict[str, Any]:
+    sd_ok = sounddevice_available()
+    np_ok = numpy_available()
+
+    devices = []
+    default_device = None
+    fixes = []
+
+    if not sd_ok:
+        fixes.append("Установите sounddevice: pip install sounddevice")
+    if not np_ok:
+        fixes.append("Установите numpy: pip install numpy")
+
+    if sd_ok:
+        try:
+            import sounddevice as sd
+            raw_devices = sd.query_devices()
+            default_input_idx = sd.default.device[0] if (sd.default.device and len(sd.default.device) > 0) else None
+
+            for index, device in enumerate(raw_devices):
+                channels = int(device.get("max_input_channels", 0))
+                if channels <= 0:
+                    continue
+                dev_dict = {
+                    "id": str(index),
+                    "name": str(device.get("name", f"Input device {index}")),
+                    "channels": channels,
+                    "default": index == default_input_idx,
+                    "default_samplerate": float(device.get("default_samplerate", 44100.0)),
+                }
+                devices.append(dev_dict)
+                if index == default_input_idx:
+                    default_device = dev_dict
+        except Exception as exc:
+            fixes.append(f"Ошибка опроса звуковых устройств: {exc}")
+
+    if sd_ok and np_ok and not devices:
+        fixes.append("Подключите микрофон к компьютеру.")
+
+    can_record = sd_ok and np_ok and len(devices) > 0
+
+    return {
+        "sounddevice_available": sd_ok,
+        "numpy_available": np_ok,
+        "default_input_device": default_device,
+        "input_devices": devices,
+        "windows_hint": "Убедитесь, что в параметрах конфиденциальности Windows разрешен доступ к микрофону для классических приложений.",
+        "can_record": can_record,
+        "fixes": fixes,
+    }
+
