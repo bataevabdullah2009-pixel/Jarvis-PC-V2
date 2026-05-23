@@ -101,7 +101,7 @@ $frontendReady = $false
 for ($i = 1; $i -le $maxRetries; $i++) {
     try {
         # Using Invoke-WebRequest for the frontend page
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -TimeoutSec 1 -ErrorAction Stop
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
         if ($response.StatusCode -eq 200) {
             $frontendReady = $true
             Write-Host "Frontend dev server is ready after $i seconds!" -ForegroundColor Green
