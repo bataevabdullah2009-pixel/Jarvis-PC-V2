@@ -250,14 +250,11 @@ class VoicePipeline:
                 )
 
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(lambda: asyncio.run(run_ask()))
-                        assistant_result = future.result()
-                else:
-                    assistant_result = loop.run_until_complete(run_ask())
-            except Exception:
+                loop = asyncio.get_running_loop()
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(lambda: asyncio.run(run_ask()))
+                    assistant_result = future.result()
+            except RuntimeError:
                 assistant_result = asyncio.run(run_ask())
 
         return {
