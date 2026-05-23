@@ -94,6 +94,14 @@ export function MinimalUI({
   const [localSettings, setLocalSettings] = useState<LocalSettings>(() => loadLocalSettings());
   const [savedText, setSavedText] = useState("Сохранено локально");
 
+  const latency = state.lastResult?.latency;
+  const ttsGenerateMs = latency?.tts_generate_ms ?? latency?.tts_ms ?? null;
+
+  const voiceLocked =
+    Boolean(state.ttsStatus?.voice_locked) ||
+    Boolean(state.debugEnv?.tts?.require_fish_audio) ||
+    Boolean(state.lastResult?.tts?.voice_locked);
+
   useEffect(() => {
     const accent = localSettings.appearance.accentColor || defaultLocalSettings.appearance.accentColor;
     document.documentElement.style.setProperty("--accent", accent);
@@ -282,8 +290,8 @@ export function MinimalUI({
                         <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>Voice: </span>
                         <strong style={{ color: "var(--accent-2)" }}>
                           {state.lastResult.tts?.provider ?? "none"} 
-                          {state.lastResult.tts?.status ? ` (${state.lastResult.tts.status})` : ""}
-                          {state.lastResult.latency?.tts_generate_ms ? ` / ${state.lastResult.latency.tts_generate_ms} ms` : ""}
+                          {state.lastResult.tts?.status ? ` (${state.lastResult.tts?.status})` : ""}
+                          {ttsGenerateMs ? ` / ${ttsGenerateMs} ms` : ""}
                         </strong>
                       </div>
                     </div>
@@ -296,7 +304,7 @@ export function MinimalUI({
                     )}
                     
                     {/* Locked voice but Fish failed warning */}
-                    {state.lastResult.tts?.provider === "text_only" && (state.ttsStatus?.voice_locked || state.debugEnv?.tts?.require_fish_audio) && (
+                    {state.lastResult.tts?.provider === "text_only" && voiceLocked && (
                       <div style={{ color: "#FF5E5E", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px" }}>
                         ⚠️ Голос Джарвиса недоступен. Чужой голос отключён.
                       </div>

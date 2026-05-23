@@ -52,7 +52,13 @@ try {
     Write-Host "Installing frontend dependencies & building Vite bundle..." -ForegroundColor Yellow
     Set-Location "$root\frontend"
     npm.cmd install
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm install failed with exit code $LASTEXITCODE"
+    }
     npm.cmd run build
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm run build failed with exit code $LASTEXITCODE. Frontend compilation is broken!"
+    }
 
     # 6. Build Backend Exe
     Write-Host "Compiling Python Backend via PyInstaller..." -ForegroundColor Yellow
@@ -79,8 +85,10 @@ try {
     # 8. Package Electron as folder structure
     Write-Host "Packaging Electron application into folder..." -ForegroundColor Yellow
     Set-Location "$root\frontend"
-    # Using package:dir which does electron-builder --dir
     npm.cmd run package:dir
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm run package:dir failed with exit code $LASTEXITCODE"
+    }
 
     # 9. Clean/Create app_current directory
     $appCurrent = Join-Path $root "app_current"

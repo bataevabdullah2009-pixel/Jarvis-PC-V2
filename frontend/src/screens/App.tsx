@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   api,
   AppStatusData,
+  BuildInfoData,
   CommandDefinition,
   CommandResult,
   DebugEnvStatus,
@@ -52,7 +53,7 @@ export type AppState = {
   history: CommandHistoryItem[];
   lastError: string | null;
   debugMode: boolean;
-  buildInfo: Record<string, any> | null;
+  buildInfo: BuildInfoData | null;
 };
 
 const DEFAULT_ASSISTANT_TEXT = "Команда выполнена.";
@@ -171,10 +172,10 @@ export function App() {
     
     if (!ttsOk || ttsProvider === "text_only") {
       const ttsErr = data.tts?.error || "Неизвестная ошибка";
-      const ttsFix = (data.tts as any)?.fix || (data.tts as any)?.details?.fix || "Проверьте настройки в .env.";
+      const ttsFix = data.tts?.fix || (data.tts?.details?.fix as string | undefined) || "Проверьте настройки в .env.";
       ttsUnavailable = `Голос недоступен (Provider: ${ttsProvider}). Ошибка: ${ttsErr}. Решение: ${ttsFix}`;
     } else if (data.tts?.fallback_used) {
-      const ttsFix = (data.tts as any)?.fix || "Проверьте ключи Fish Audio в .env.";
+      const ttsFix = data.tts?.fix || "Проверьте ключи Fish Audio в .env.";
       ttsUnavailable = `Использован резервный голос (${ttsProvider}), основной недоступен. Решение: ${ttsFix}`;
     }
     const historyItem: CommandHistoryItem = {

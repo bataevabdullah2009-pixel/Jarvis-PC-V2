@@ -69,15 +69,24 @@ export type CommandResult = {
     status?: string;
     async?: boolean;
     pending_audio?: boolean;
+    queued?: boolean;
+    voice_locked?: boolean;
+    voice_identity?: string;
+    fix?: string | null;
+    details?: Record<string, unknown>;
   };
   latency?: {
-    router_ms: number;
-    ai_ms: number;
-    tts_ms: number;
-    total_ms: number;
-    openrouter_ms?: number;
+    router_ms?: number;
+    intent_ms?: number;
     local_command_ms?: number;
+    openrouter_ms?: number;
+    ai_ms?: number;
+    tts_ms?: number;
+    tts_enqueue_ms?: number;
     tts_generate_ms?: number;
+    tts_playback_started_ms?: number;
+    total_ms?: number;
+    total_response_ms?: number;
   };
   actions: CommandAction[];
   requires_confirmation: boolean;
@@ -191,9 +200,20 @@ export type TTSStatusData = {
   fallback_ready: boolean;
   system_audio_ready: boolean;
   require_fish_audio?: boolean;
+  voice_locked?: boolean;
+  fallback_used?: boolean;
   last_provider_used?: string | null;
   last_error: string | null;
-  voice_locked?: boolean;
+  voice_identity?: "jarvis" | "fallback" | "text_only" | string;
+};
+
+export type BuildInfoData = {
+  git_sha?: string;
+  git_branch?: string;
+  built_at?: string;
+  frontend_mode?: string;
+  running_from_source?: boolean;
+  packaged?: boolean;
 };
 
 export type SayResult = {
@@ -328,7 +348,7 @@ async function rawRequest<T>(path: string, init?: RequestInit): Promise<ApiEnvel
 export const api = {
   health: () => request<HealthData>("/health"),
   appStatus: () => request<AppStatusData>("/app/status"),
-  buildInfo: () => request<Record<string, unknown>>("/runtime/build-info"),
+  buildInfo: () => request<BuildInfoData>("/runtime/build-info"),
   fullHealth: () => request<FullHealthData>("/health/full"),
   licenseStatus: () => request<LicenseStatusData>("/license/status"),
   settings: () => request<SettingsData>("/settings"),
