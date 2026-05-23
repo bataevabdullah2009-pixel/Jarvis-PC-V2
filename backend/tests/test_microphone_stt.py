@@ -130,7 +130,7 @@ def test_record_command_transcript_to_assistant(monkeypatch) -> None:
     assert result["ok"] is True
     assert result["final_status"] == "sent_to_assistant"
     assert result["stt"]["transcript"] == "джарвис как дела"
-    mock_router_handle.assert_called_once_with("джарвис как дела", source="voice", context={"dry_run": False})
+    mock_router_handle.assert_called_once_with("джарвис как дела", source="voice", context={"dry_run": False, "speak": True, "wait_for_tts": False})
 
 
 def test_ui_device_id_sent() -> None:

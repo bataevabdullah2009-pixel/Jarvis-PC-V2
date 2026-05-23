@@ -37,6 +37,26 @@ import {
 } from "../lib/localSettings";
 import { playSound, type SoundEventName } from "../services/soundManager";
 
+function formatDeviceName(dev: any): { display: string; tooltip: string | undefined } {
+  const name = dev.name || "";
+  const mojibakeChars = /[\u00C0-\u00FF]/g;
+  const matches = name.match(mojibakeChars);
+  const isGarbled = matches && matches.length >= 3;
+  
+  if (isGarbled) {
+    const fallbackName = `Входное устройство #${dev.id}`;
+    return {
+      display: `${fallbackName} (Нечитаемый микрофон)`,
+      tooltip: name
+    };
+  }
+  
+  return {
+    display: name,
+    tooltip: undefined
+  };
+}
+
 type Props = {
   state: AppState;
   onScreen: (screen: Screen) => void;
@@ -481,11 +501,14 @@ function ControlPanel({
         <span>Микрофон</span>
         <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)}>
           <option value="default">По умолчанию (Default)</option>
-          {state.devices.map((dev) => (
-            <option key={dev.id} value={dev.id}>
-              {dev.name}
-            </option>
-          ))}
+          {state.devices.map((dev) => {
+            const formatted = formatDeviceName(dev);
+            return (
+              <option key={dev.id} value={dev.id} title={formatted.tooltip}>
+                {formatted.display}
+              </option>
+            );
+          })}
         </select>
       </label>
       <label className="field-row">
@@ -813,11 +836,14 @@ function VoicesPanel({
         <span>Выбор микрофона</span>
         <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)} style={{ width: "100%" }}>
           <option value="default">По умолчанию (Default)</option>
-          {state.devices.map((dev) => (
-            <option key={dev.id} value={dev.id}>
-              {dev.name}
-            </option>
-          ))}
+          {state.devices.map((dev) => {
+            const formatted = formatDeviceName(dev);
+            return (
+              <option key={dev.id} value={dev.id} title={formatted.tooltip}>
+                {formatted.display}
+              </option>
+            );
+          })}
         </select>
       </label>
       <button className="wide-button" type="button" onClick={() => onTestMicrophone(selectedDevice)}>

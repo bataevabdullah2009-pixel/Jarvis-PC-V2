@@ -264,7 +264,7 @@ export function App() {
       setState((current) => ({
         ...current,
         assistantStatus: "error",
-        statusText: "Тишина",
+        statusText: "Микрофон не получает звук",
         lastError: data.stt?.fix || "Микрофон не получает звук. Проверьте громкость и подключение."
       }));
       playSound("error");
@@ -275,7 +275,7 @@ export function App() {
       setState((current) => ({
         ...current,
         assistantStatus: "error",
-        statusText: "Ошибка STT",
+        statusText: "STT/Vosk не настроен",
         lastError: data.stt?.fix || "Микрофон слышит, но STT не настроен."
       }));
       playSound("error");
@@ -286,8 +286,19 @@ export function App() {
       setState((current) => ({
         ...current,
         assistantStatus: "warning",
-        statusText: "Не распознано",
+        statusText: "Речь не распознана",
         lastError: data.stt?.fix || "Речь не распознана. Говорите громче и чётче."
+      }));
+      playSound("error");
+      return;
+    }
+
+    if (finalStatus === "record_error") {
+      setState((current) => ({
+        ...current,
+        assistantStatus: "error",
+        statusText: "Голосовой модуль недоступен",
+        lastError: data.stt?.fix || data.stt?.error_type || "Ошибка при записи звука."
       }));
       playSound("error");
       return;
@@ -295,11 +306,33 @@ export function App() {
 
     const transcript = data.stt?.transcript?.trim();
     const assistantResult = data.assistant_result;
+
+    if (finalStatus === "sent_to_assistant" && transcript && assistantResult) {
+      playSound("command_received");
+      applyCommandResult(transcript, assistantResult);
+      return;
+    }
+
     if (transcript && assistantResult) {
       playSound("command_received");
       applyCommandResult(transcript, assistantResult);
       return;
     }
+
+    if (finalStatus === "recorded" && transcript) {
+      setState((current) => ({
+        ...current,
+        assistantStatus: "done",
+        statusText: "Записано",
+        lastResult: {
+          ...current.lastResult,
+          response_text: `Распознано: "${transcript}"`
+        } as any
+      }));
+      playSound("success");
+      return;
+    }
+
     if (transcript) {
       playSound("command_received");
       await sendCommand(transcript);

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.core.config import env_debug_status, get_settings, patch_settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger
 from app.core.runtime import build_info
 from app.diagnostics.dependencies import check_backend_dependencies
 from app.diagnostics.full_test import run_full_test
@@ -28,6 +28,7 @@ from app.core.assistant_orchestrator import AssistantOrchestrator
 
 
 configure_logging()
+logger = get_logger(__name__)
 
 app = FastAPI(title="JARVIS PC V2 Backend", version="0.1.0")
 app.add_middleware(
@@ -494,12 +495,32 @@ def voice_devices() -> dict[str, Any]:
 @app.get("/voice/mic-diagnostics")
 def voice_mic_diagnostics() -> dict[str, Any]:
     from app.voice.microphone import mic_diagnostics
-    return envelope(mic_diagnostics())
+    diagnostics = mic_diagnostics()
+    default_dev = diagnostics.get("default_input_device")
+    selected_id = default_dev.get("id") if default_dev else "default"
+    
+    data = {
+        "sounddevice_available": diagnostics.get("sounddevice_available"),
+        "numpy_available": diagnostics.get("numpy_available"),
+        "default_input_device": default_dev,
+        "input_devices": diagnostics.get("input_devices"),
+        "selected_device_id": selected_id,
+        "can_record": diagnostics.get("can_record"),
+        "windows_hint": diagnostics.get("windows_hint"),
+        "windows_microphone_hint": diagnostics.get("windows_hint"),
+        "fixes": diagnostics.get("fixes")
+    }
+    return envelope(data)
 
 
 @app.post("/voice/test-capture")
 def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
-    from app.voice.microphone import capture_audio, VoiceDependencyError
+    from app.voice.microphone import capture_audio, resolve_input_device, VoiceDependencyError
+    
+    # Resolve device to get clean name
+    dev_res = resolve_input_device(request.device_id)
+    device_name = dev_res.get("device_name", "Unknown Device")
+    
     try:
         capture = capture_audio(
             device_id=request.device_id,
@@ -508,42 +529,64 @@ def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
         rms = capture.rms
         peak = capture.peak
         heard = rms > 0.005 or peak > 0.02
+        
         fix_msg = None
+        error_type = None
         if not heard:
-            fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
-        return {
-            "ok": True,
-            "device_id": request.device_id,
+            error_type = "no_audio"
+            fix_msg = "Проверьте разрешение Windows для микрофона, уровень громкости и выбранное устройство."
+            
+        data = {
+            "ok": heard,
+            "device_id": str(request.device_id),
+            "device_name": device_name,
             "sample_rate": capture.sample_rate,
             "channels": capture.channels,
+            "duration_seconds": request.duration_seconds,
             "rms": rms,
             "peak": peak,
             "heard_signal": heard,
-            "error_type": None,
+            "error_type": error_type,
             "fix": fix_msg
         }
+        
+        err_envelope = None
+        if not heard:
+            err_envelope = {
+                "code": "NO_AUDIO_HEARD",
+                "message": "Микрофон не получает звук.",
+                "error_type": "no_audio",
+                "fix": fix_msg
+            }
+            
+        return envelope(data, ok=heard, error=err_envelope)
+        
     except Exception as exc:
         error_code = getattr(exc, "code", "CAPTURE_FAILED")
-        fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
+        fix_msg = "Проверьте разрешение Windows для микрофона, уровень громкости и выбранное устройство."
         if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
             fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
-        return {
+            
+        data = {
             "ok": False,
-            "device_id": request.device_id,
+            "device_id": str(request.device_id),
+            "device_name": device_name,
             "sample_rate": 16000,
             "channels": 1,
+            "duration_seconds": request.duration_seconds,
             "rms": 0.0,
             "peak": 0.0,
             "heard_signal": False,
             "error_type": error_code,
             "fix": fix_msg
         }
+        return envelope(data, ok=False, error={"code": "CAPTURE_FAILED", "message": str(exc), "details": {"fix": fix_msg}})
 
 
 @app.get("/voice/stt-status")
 def voice_stt_status() -> dict[str, Any]:
     from app.voice.stt import stt_status
-    return stt_status(get_settings())
+    return envelope(stt_status(get_settings()))
 
 
 @app.post("/voice/test-microphone")
@@ -564,6 +607,7 @@ def voice_test_microphone(request: MicrophoneTestRequest) -> dict[str, Any]:
 
 @app.post("/voice/record-command")
 def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
+    import traceback
     event_bus.emit("voice.recording.started", {"device_id": request.device_id})
     try:
         result = VoicePipeline(get_settings()).record_command(
@@ -573,16 +617,46 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
             text_override=request.text_override,
             dry_run=request.dry_run,
         )
-    except VoiceDependencyError as exc:
-        event_bus.emit("voice.error", {"code": exc.code})
-        return envelope(None, ok=False, error=voice_error_response(exc))
-
-    transcript = result.get("stt", {}).get("transcript") if isinstance(result.get("stt"), dict) else result.get("transcript")
-    event_bus.emit(
-        "voice.recording.completed",
-        {"device_id": request.device_id, "transcript_available": bool(transcript)},
-    )
-    return envelope(result, ok=result.get("ok", True))
+        transcript = result.get("stt", {}).get("transcript") if isinstance(result.get("stt"), dict) else result.get("transcript")
+        event_bus.emit(
+            "voice.recording.completed",
+            {"device_id": request.device_id, "transcript_available": bool(transcript)},
+        )
+        
+        if not result.get("ok", True):
+            error_payload = {
+                "code": "VOICE_RECORD_ERROR",
+                "message": result.get("stt", {}).get("fix") or "Voice recording failed",
+                "error_type": result.get("stt", {}).get("error_type") or "CAPTURE_FAILED",
+                "fix": result.get("stt", {}).get("fix") or "Проверьте выбранный микрофон."
+            }
+            return envelope(result, ok=False, error=error_payload)
+            
+        return envelope(result, ok=result.get("ok", True))
+    except Exception as exc:
+        logger.exception("Exception inside voice_record_command endpoint")
+        error_msg = str(exc)
+        error_type = exc.__class__.__name__
+        fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
+        if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
+            fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
+        
+        error_payload = {
+            "code": "VOICE_RECORD_ERROR",
+            "message": error_msg,
+            "error_type": error_type,
+            "fix": fix_msg
+        }
+        
+        fallback_data = {
+            "final_status": "record_error",
+            "capture": None,
+            "stt": None,
+            "assistant_result": None
+        }
+        
+        event_bus.emit("voice.error", {"code": "VOICE_RECORD_ERROR", "message": error_msg})
+        return envelope(fallback_data, ok=False, error=error_payload)
 
 
 @app.post("/voice/start-listener")
