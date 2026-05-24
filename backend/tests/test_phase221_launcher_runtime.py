@@ -71,7 +71,21 @@ def test_start_listener_blocked_when_no_audio(monkeypatch) -> None:
     assert body["data"]["state"] == "stopped"
 
 
-def test_assistant_ask_works_with_listener_disabled() -> None:
+def test_assistant_ask_works_with_listener_disabled(monkeypatch) -> None:
+    from app.providers.openrouter import PlannerResult
+    from app.router.ai_planner import AIPlanner
+
+    def fake_plan(self, text: str, context=None) -> PlannerResult:
+        return PlannerResult(
+            status="answered",
+            answer_text="Mock OpenRouter OK",
+            actions=[],
+            provider="openrouter",
+            openrouter_called=True,
+            status_code=200,
+        )
+
+    monkeypatch.setattr(AIPlanner, "plan", fake_plan)
     # Even when voice listener is stopped, assistant/ask should work!
     assert voice_listener.state == "stopped"
     response = client.post(

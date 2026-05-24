@@ -8,14 +8,16 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 import httpx
+import requests
 
 from app.core.config import LOG_DIR, Settings
 
 
-CONNECT_TIMEOUT_SECONDS = 5.0
-READ_TIMEOUT_SECONDS = 10.0
-OPENROUTER_TOTAL_TIMEOUT_SECONDS = 15.0
+CONNECT_TIMEOUT_SECONDS = 10.0
+READ_TIMEOUT_SECONDS = 20.0
+OPENROUTER_TOTAL_TIMEOUT_SECONDS = 30.0
 MAX_RETRIES = 1
+NETWORK_FALLBACK_TEXT = "Сэр, OpenRouter сейчас не отвечает по сети. Локальные команды доступны."
 SYSTEM_PROMPT = (
     "Ты — JARVIS, русскоязычный персональный AI-ассистент на Windows PC.\n"
     "Отвечай коротко: 1–3 предложения. Для голосового ответа не больше 350 символов, если пользователь не просит подробности.\n"
@@ -63,8 +65,10 @@ def _fix_for(status_code: int | None, error_type: str) -> str:
         return "Модель не найдена на OpenRouter. Проверьте правильность JARVIS_OPENROUTER_MODEL."
     if error_type == "rate_limited" or status_code == 429:
         return "Превышен лимит запросов. Подождите немного и повторите попытку."
-    if error_type == "timeout":
+    if error_type in {"timeout", "network_timeout", "tls_handshake_timeout"}:
         return "Таймаут соединения с OpenRouter. Проверьте интернет-соединение или прокси."
+    if error_type == "ssl_error":
+        return "OpenRouter TLS/SSL error: check antivirus HTTPS inspection, proxy, or certificates."
     if status_code and status_code >= 500:
         return "OpenRouter server error, retry later."
     if error_type in {"ConnectTimeout", "ReadTimeout", "TimeoutException"}:
@@ -72,6 +76,21 @@ def _fix_for(status_code: int | None, error_type: str) -> str:
     if error_type in {"ConnectError", "NetworkError", "TransportError"}:
         return "OpenRouter network error: check network, proxy, DNS, or TLS interception."
     return "See logs/openrouter.log and logs/provider.log."
+
+
+def classify_openrouter_exception(exc: BaseException) -> str:
+    raw = f"{exc.__class__.__name__}: {exc}".lower()
+    if "handshake" in raw or "_ssl.c" in raw:
+        return "tls_handshake_timeout"
+    if "ssl" in raw or "certificate" in raw:
+        return "ssl_error"
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout)):
+        return "network_timeout"
+    if isinstance(exc, (httpx.TimeoutException, requests.exceptions.Timeout)):
+        return "network_timeout"
+    if isinstance(exc, (httpx.NetworkError, httpx.TransportError, requests.exceptions.ConnectionError)):
+        return "network_timeout"
+    return "provider_error"
 
 
 def _error_message(status_code: int | None, error_type: str, raw_message: str, model: str) -> str:
@@ -91,8 +110,10 @@ def _error_message(status_code: int | None, error_type: str, raw_message: str, m
         return f"OpenRouter 404: model not found: {model}."
     if error_type == "rate_limited" or status_code == 429:
         return "OpenRouter 429: rate limit or quota exceeded."
-    if error_type == "timeout":
-        return f"OpenRouter request timeout: {raw_message or 'read/connect timeout'}"
+    if error_type in {"timeout", "network_timeout", "tls_handshake_timeout"}:
+        return NETWORK_FALLBACK_TEXT
+    if error_type == "ssl_error":
+        return NETWORK_FALLBACK_TEXT
     if error_type in {"ConnectTimeout", "ReadTimeout", "TimeoutException"}:
         return f"OpenRouter timeout during SSL/network request: {raw_message}"
     if raw_message:
@@ -296,20 +317,28 @@ class OpenRouterPlanner:
             except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as exc:
                 last_error = exc
                 latency_ms = int((time.perf_counter() - started) * 1000)
+                err_type = classify_openrouter_exception(exc)
                 openrouter_logger.info(
                     "[OPENROUTER] status_code=null latency_ms=%s error_type=%s error_message=%s retry_count=%s",
                     latency_ms,
-                    exc.__class__.__name__,
+                    err_type,
                     str(exc) or exc.__class__.__name__,
                     retry_count,
                 )
-                if attempt >= MAX_RETRIES or latency_ms >= int(OPENROUTER_TOTAL_TIMEOUT_SECONDS * 1000):
+                if attempt >= self.settings.openrouter_max_retries or latency_ms >= int(self.settings.openrouter_total_timeout * 1000):
                     break
+
+        if data is None and last_error is not None:
+            fallback = self._requests_fallback(headers, payload, started, retry_count)
+            if fallback is not None:
+                if fallback.status == "answered":
+                    return fallback
+                return fallback
 
         if data is None:
             latency_ms = int((time.perf_counter() - started) * 1000)
             exc = last_error or RuntimeError("unknown_openrouter_error")
-            err_type = "timeout" if isinstance(exc, httpx.TimeoutException) else "provider_error"
+            err_type = classify_openrouter_exception(exc)
             result = self._unavailable(
                 err_type,
                 None,
@@ -415,6 +444,99 @@ class OpenRouterPlanner:
             "latency_ms": latency_ms,
         }
 
+    def _requests_fallback(
+        self,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        started: float,
+        retry_count: int,
+    ) -> PlannerResult | None:
+        try:
+            response = requests.post(
+                self.endpoint,
+                headers=headers,
+                json=payload,
+                timeout=(self.settings.openrouter_connect_timeout, self.settings.openrouter_read_timeout),
+            )
+        except requests.exceptions.RequestException as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            err_type = classify_openrouter_exception(exc)
+            return self._unavailable(
+                err_type,
+                None,
+                str(exc) or exc.__class__.__name__,
+                latency_ms=latency_ms,
+                retry_count=retry_count,
+                openrouter_called=True,
+            )
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        status_code = response.status_code
+        raw_response_preview = response.text[:1000].replace("\n", " ")
+        if status_code >= 400:
+            raw_message = self._extract_error_message(response.text) or response.reason
+            if status_code == 401:
+                err_type = "invalid_key"
+            elif status_code == 402:
+                err_type = "no_credits_or_payment_required"
+            elif status_code == 403:
+                err_type = "forbidden"
+            elif status_code == 404:
+                err_type = "model_not_found"
+            elif status_code == 429:
+                err_type = "rate_limited"
+            else:
+                err_type = "provider_error"
+            return self._unavailable(
+                err_type,
+                status_code,
+                raw_message,
+                latency_ms=latency_ms,
+                retry_count=retry_count,
+                openrouter_called=True,
+                raw_response_preview=raw_response_preview,
+            )
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            return self._unavailable(
+                "provider_error",
+                status_code,
+                str(exc),
+                latency_ms=latency_ms,
+                retry_count=retry_count,
+                openrouter_called=True,
+                raw_response_preview=raw_response_preview,
+            )
+
+        answer = self._extract_answer_text(data)
+        if not answer:
+            return self._unavailable(
+                "provider_error",
+                status_code,
+                "OpenRouter returned empty choices[0].message.content.",
+                latency_ms=latency_ms,
+                retry_count=retry_count,
+                openrouter_called=True,
+                raw_response_preview=raw_response_preview,
+            )
+
+        preview = answer[:160].replace("\n", " ")
+        return PlannerResult(
+            status="answered",
+            answer_text=answer,
+            actions=[],
+            model=self.settings.openrouter_model,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            retry_count=retry_count,
+            endpoint=self.endpoint,
+            openrouter_called=True,
+            raw_response_preview=raw_response_preview,
+            response_text_preview=preview,
+        )
+
     def _unavailable(
         self,
         error_type: str,
@@ -427,9 +549,10 @@ class OpenRouterPlanner:
         raw_response_preview: str | None = None,
     ) -> PlannerResult:
         message = _error_message(status_code, error_type, raw_message, self.settings.openrouter_model)
+        answer_text = NETWORK_FALLBACK_TEXT if error_type in {"timeout", "network_timeout", "tls_handshake_timeout", "ssl_error"} else f"OpenRouter error: {message}"
         return PlannerResult(
             status="unavailable",
-            answer_text=f"OpenRouter error: {message}",
+            answer_text=answer_text,
             actions=[],
             error=error_type,
             model=self.settings.openrouter_model,

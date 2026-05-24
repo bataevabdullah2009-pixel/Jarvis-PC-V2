@@ -1,8 +1,5 @@
 @echo off
-echo ==================================================
-echo ПРЕДУПРЕЖДЕНИЕ: UPDATE_AND_LAUNCH_APP.bat устарел!
-echo Используйте START_JARVIS.bat для запуска Jarvis.
-echo ==================================================
-echo Запуск основного START_JARVIS.bat...
-timeout /t 3
-call "%~dp0START_JARVIS.bat"
+cd /d "%~dp0"
+echo WARNING: For normal use start START_JARVIS.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\update_and_launch.ps1"
+pause

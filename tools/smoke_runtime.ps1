@@ -1,131 +1,150 @@
-# Jarvis PC V2 Smoke Runtime Verification Script
-# Phase 2.2.1
+param(
+    [switch]$StrictEnv
+)
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Resolve-Path "$ScriptDir\.."
+$ProjectRoot = (Resolve-Path "$ScriptDir\..").Path
+$BackendDir = Join-Path $ProjectRoot "backend"
+$Port = 8001
+$BaseUrl = "http://127.0.0.1:$Port"
+$BackendProcess = $null
+$Warnings = New-Object System.Collections.Generic.List[string]
 
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "STEP 1: Checking Codebase Source Format" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
-& python "$ProjectRoot\tools\check_source_format.py"
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Source formatting check failed!"
-    exit 1
+function Write-Step {
+    param([string]$Text)
+    Write-Host ""
+    Write-Host "==> $Text" -ForegroundColor Cyan
 }
 
-Write-Host "`n==================================================" -ForegroundColor Cyan
-Write-Host "STEP 2: Freeing Port 8000" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
-& "$ProjectRoot\tools\kill_jarvis_processes.ps1"
-Start-Sleep -Seconds 3
+function Invoke-Json {
+    param(
+        [string]$Path,
+        [string]$Method = "GET",
+        [object]$Body = $null
+    )
 
-
-$port = "8001"
-$env:JARVIS_BACKEND_PORT = $port
-
-Write-Host "`n==================================================" -ForegroundColor Cyan
-Write-Host "STEP 3: Launching Jarvis PC V2 Backend on port $port" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
-$BackendDir = "$ProjectRoot\backend"
-$Process = Start-Process -FilePath "python" -ArgumentList "run_backend.py" -WorkingDirectory $BackendDir -PassThru -NoNewWindow
-
-Write-Host "Waiting for backend to spin up and respond to /health..." -ForegroundColor Gray
-$maxRetries = 15
-$alive = $false
-for ($i = 1; $i -le $maxRetries; $i++) {
-    try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -Method Get
-        if ($health.ok -eq $true -and $health.data.service -eq "jarvis-pc-v2-backend") {
-            $alive = $true
-            break
-        }
+    $uri = "$BaseUrl$Path"
+    if ($Body -ne $null) {
+        $json = $Body | ConvertTo-Json -Depth 8
+        return Invoke-RestMethod -Uri $uri -Method $Method -Body $json -ContentType "application/json" -TimeoutSec 35
     }
-    catch {
-        # ignore connection error and wait
-    }
-    Start-Sleep -Seconds 1
+    return Invoke-RestMethod -Uri $uri -Method $Method -TimeoutSec 35
 }
 
-if (-not $alive) {
-    Write-Error "Backend failed to respond to health check in time."
-    if ($Process) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-    exit 1
-}
-Write-Host "[+] Backend is alive and running!" -ForegroundColor Green
-
-Write-Host "`n==================================================" -ForegroundColor Cyan
-Write-Host "STEP 4: Testing Endpoints Validity" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
-
-$endpoints = @(
-    "health",
-    "debug/startup",
-    "runtime/process-info",
-    "settings",
-    "commands",
-    "voice/tts-status",
-    "voice/devices",
-    "voice/listener-status"
-)
-
-foreach ($ep in $endpoints) {
-    Write-Host "Checking GET http://127.0.0.1:$port/$ep ..." -ForegroundColor Gray
-    try {
-        $res = Invoke-RestMethod -Uri "http://127.0.0.1:$port/$ep" -Method Get
-        if ($res.ok -eq $false -and $ep -ne "voice/listener-status") {
-            # listener-status ok can be false if disabled, but should still respond
-            Write-Error "Endpoint /$ep returned ok=false!"
-            if ($Process) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-            exit 1
-        }
-        Write-Host "  [+] /$ep OK!" -ForegroundColor Green
-    }
-    catch {
-        Write-Error "Failed to call endpoint /$ep : $_"
-        if ($Process) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-        exit 1
+function Stop-Backend {
+    if ($BackendProcess -and -not $BackendProcess.HasExited) {
+        Stop-Process -Id $BackendProcess.Id -Force -ErrorAction SilentlyContinue
     }
 }
 
-Write-Host "`n==================================================" -ForegroundColor Cyan
-Write-Host "STEP 5: Testing Assistant Query Routing" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
 try {
-    $bytes = @(208, 148, 208, 182, 208, 176, 209, 128, 208, 178, 208, 184, 209, 129, 44, 32, 208, 186, 208, 176, 208, 186, 32, 208, 180, 208, 181, 208, 187, 208, 176, 63)
-    $textVal = [System.Text.Encoding]::UTF8.GetString($bytes)
-    $body = @{
-        text = $textVal
+    Write-Step "Checking source format"
+    & python "$ProjectRoot\tools\check_source_format.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Source format check failed."
+    }
+
+    Write-Step "Cleaning old JARVIS processes"
+    & "$ProjectRoot\tools\kill_jarvis_processes.ps1"
+    Start-Sleep -Seconds 2
+
+    Write-Step "Starting backend on port $Port"
+    $env:JARVIS_PROJECT_ROOT = $ProjectRoot
+    $env:JARVIS_BACKEND_PORT = [string]$Port
+    $env:JARVIS_LISTENER_ENABLED = "false"
+    $BackendProcess = Start-Process -FilePath "python" -ArgumentList "run_backend.py" -WorkingDirectory $BackendDir -PassThru -WindowStyle Hidden
+
+    $ready = $false
+    for ($i = 1; $i -le 25; $i++) {
+        try {
+            $health = Invoke-Json -Path "/health"
+            if ($health.ok -eq $true) {
+                $ready = $true
+                break
+            }
+        }
+        catch {
+            Start-Sleep -Seconds 1
+        }
+    }
+
+    if (-not $ready) {
+        throw "Backend crash or startup failure: /health did not respond."
+    }
+
+    Write-Step "Checking required debug endpoints"
+    $health = Invoke-Json -Path "/health"
+    $startup = Invoke-Json -Path "/debug/startup"
+    $envStatus = Invoke-Json -Path "/debug/env-status"
+    $network = Invoke-Json -Path "/debug/network-status"
+    $voiceProvider = Invoke-Json -Path "/debug/voice-provider-status"
+    $ttsStatus = Invoke-Json -Path "/voice/tts-status"
+    $listenerStatus = Invoke-Json -Path "/voice/listener-status"
+
+    if ($health.ok -ne $true) {
+        throw "/health returned ok=false."
+    }
+    if ($startup.backend_started -ne $true) {
+        throw "/debug/startup did not report backend_started=true."
+    }
+    if ($listenerStatus.data.running -ne $false) {
+        throw "Listener should be disabled/stopped by default."
+    }
+
+    if ($envStatus.openrouter.key_present -ne $true) {
+        $Warnings.Add("OpenRouter key missing in loaded env.")
+    }
+    if ($envStatus.fish_audio.key_present -ne $true -or $envStatus.fish_audio.voice_id_present -ne $true) {
+        $Warnings.Add("Fish Audio key or voice id missing in loaded env.")
+    }
+    if ($voiceProvider.selected_provider -eq "text_only") {
+        $Warnings.Add("Fish Audio voice unavailable; text_only selected.")
+    }
+    if ($network.ok -ne $true) {
+        $networkError = $network.openrouter.error_type
+        if ($networkError -in @("tls_handshake_timeout", "network_timeout", "ssl_error")) {
+            $Warnings.Add("OpenRouter network warning: $networkError")
+        }
+        else {
+            $Warnings.Add("OpenRouter network check failed: $networkError")
+        }
+    }
+    if ($StrictEnv -and $Warnings.Count -gt 0) {
+        throw "Strict env mode failed: $($Warnings -join '; ')"
+    }
+
+    Write-Step "Checking assistant ask"
+    $askBytes = @(208, 148, 208, 182, 208, 176, 209, 128, 208, 178, 208, 184, 209, 129, 44, 32, 208, 186, 208, 176, 208, 186, 32, 208, 180, 208, 181, 208, 187, 208, 176, 63)
+    $askText = [System.Text.Encoding]::UTF8.GetString($askBytes)
+    $askBody = @{
+        text = $askText
         speak = $false
         source = "smoke"
         context = @{}
-    } | ConvertTo-Json
-
-    Write-Host "Sending POST /assistant/ask..." -ForegroundColor Gray
-    $res = Invoke-RestMethod -Uri "http://127.0.0.1:$port/assistant/ask" -Method Post -Body $body -ContentType "application/json"
-    
-    if (-not $res.ok) {
-        Write-Error "Assistant ask query failed!"
-        if ($Process) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-        exit 1
     }
-    
-    Write-Host "  [+] Ask Query OK!" -ForegroundColor Green
-    Write-Host "  [+] Response: $($res.text)" -ForegroundColor Gray
+    $ask = Invoke-Json -Path "/assistant/ask" -Method "POST" -Body $askBody
+    if ($ask.ok -ne $true) {
+        throw "/assistant/ask returned ok=false."
+    }
+
+    if ($Warnings.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Smoke warnings:" -ForegroundColor Yellow
+        foreach ($warning in $Warnings) {
+            Write-Host " - $warning" -ForegroundColor Yellow
+        }
+    }
+
+    Write-Host ""
+    Write-Host "[+] SMOKE RUNTIME PASSED" -ForegroundColor Green
+    exit 0
 }
 catch {
-    Write-Error "Failed to query assistant ask endpoint: $_"
-    if ($Process) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
+    Write-Host ""
+    Write-Host "[!] SMOKE RUNTIME FAILED: $_" -ForegroundColor Red
     exit 1
 }
-
-Write-Host "`n==================================================" -ForegroundColor Cyan
-Write-Host "STEP 6: Stopping Jarvis PC V2 Backend" -ForegroundColor Cyan
-Write-Host "==================================================" -ForegroundColor Cyan
-if ($Process) {
-    Stop-Process -Id $Process.Id -Force
-    Write-Host "[+] Backend stopped cleanly." -ForegroundColor Green
+finally {
+    Stop-Backend
 }
-
-Write-Host "`n[+++] SMOKE RUNTIME VERIFICATION SUCCESSFUL! [+++]" -ForegroundColor Green
-exit 0

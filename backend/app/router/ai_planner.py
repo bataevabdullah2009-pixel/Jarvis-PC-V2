@@ -49,7 +49,7 @@ class AIPlanner:
                 latency_ms=result.latency_ms,
                 retry_count=result.retry_count,
                 endpoint=result.endpoint,
-                openrouter_called=True,
+                openrouter_called=result.openrouter_called,
                 raw_response_preview=result.raw_response_preview,
                 response_text_preview=result.response_text_preview
             )

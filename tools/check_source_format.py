@@ -59,6 +59,10 @@ def main():
                     
                     if has_isolated_cr:
                         errors.append(f"Format: {rel_path} CR-only line endings detected")
+
+                    first_line = content.splitlines()[0] if content.splitlines() else b""
+                    if len(first_line) > 2000:
+                        errors.append(f"Format: {rel_path} first line is longer than 2000 bytes ({len(first_line)} bytes)")
                 except Exception as e:
                     errors.append(f"Format: {rel_path} failed line endings check: {e}")
 
@@ -74,15 +78,11 @@ def main():
             # PowerShell check
             elif ext == ".ps1":
                 try:
-                    size = os.path.getsize(file_path)
-                    if size > 2048:  # > 2 KB
-                        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                            lines = f.readlines()
-                        # Normalize lines (ignoring blank lines/comments if needed, but a single line is a single line)
-                        # Remove empty ending elements
-                        lines = [line for line in lines if line.strip()]
-                        if len(lines) <= 1:
-                            errors.append(f"PowerShell: {rel_path} is larger than 2KB ({size} bytes) but contains only {len(lines)} line(s)")
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        lines = f.readlines()
+                    non_empty_lines = [line for line in lines if line.strip()]
+                    if rel_path.replace("\\", "/") == "tools/start_jarvis.ps1" and len(non_empty_lines) < 80:
+                        errors.append(f"PowerShell: {rel_path} must contain at least 80 non-empty lines, got {len(non_empty_lines)}")
                 except Exception as e:
                     errors.append(f"PowerShell: {rel_path} failed to read: {e}")
 
@@ -91,8 +91,8 @@ def main():
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         lines = [line for line in f if line.strip()]
-                    if len(lines) <= 1:
-                        errors.append(f"Batch: {rel_path} has only {len(lines)} line(s)")
+                    if len(lines) < 4:
+                        errors.append(f"Batch: {rel_path} must contain at least 4 non-empty lines, got {len(lines)}")
                 except Exception as e:
                     errors.append(f"Batch: {rel_path} failed to read: {e}")
 
@@ -105,6 +105,15 @@ def main():
                         errors.append(f"TypeScript: {rel_path} has a first line longer than 2000 characters ({len(first_line)} chars)")
                 except Exception as e:
                     errors.append(f"TypeScript: {rel_path} failed to read: {e}")
+
+    main_py = os.path.join(root_dir, "backend", "app", "main.py")
+    if os.path.exists(main_py):
+        with open(main_py, "r", encoding="utf-8", errors="ignore") as f:
+            line_count = sum(1 for line in f if line.strip())
+        if line_count < 300:
+            errors.append(f"Python: backend/app/main.py must contain at least 300 non-empty lines, got {line_count}")
+    else:
+        errors.append("Python: backend/app/main.py is missing")
 
     # Output results
     if errors:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import os
@@ -33,22 +33,22 @@ from app.voice.listener import voice_listener
 configure_logging()
 logger = get_logger(__name__)
 
-app = FastAPI(title="JARVIS PC V2 Backend", version="0.1.0")
-app.started_at = time.time()
+from contextlib import asynccontextmanager
 
-# Start background services safely via startup event
-@app.on_event("startup")
-async def startup_event() -> None:
-    # 1. Start reminder service safely
+def safe_start_reminder_service() -> None:
     try:
         logger.info("Starting reminder service safely on app startup...")
-        # Clean up very old / overdue reminders on start
         reminder_service.cleanup_old_reminders()
         reminder_service.start()
     except Exception as e:
-        logger.exception("Failed to start reminder_service on startup: %s", e)
+        logger.exception("Failed to start reminder_service: %s", e)
 
-    # 2. Check if voice listener is enabled by env and safe Checks pass
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup:
+    safe_start_reminder_service()
+
+    # Check if voice listener is enabled by env and safe Checks pass
     listener_enabled_env = os.getenv("JARVIS_LISTENER_ENABLED", "false").lower() == "true"
     if listener_enabled_env:
         try:
@@ -68,19 +68,35 @@ async def startup_event() -> None:
     else:
         logger.info("Voice listener auto-start is disabled (JARVIS_LISTENER_ENABLED=false).")
 
+    yield
+
+    # Shutdown:
+    try:
+        reminder_service.stop()
+    except Exception:
+        pass
+    try:
+        voice_listener.stop()
+    except Exception:
+        pass
+
+app = FastAPI(title="JARVIS PC V2 Backend", version="0.1.0", lifespan=lifespan)
+app.started_at = time.time()
+
+
 @app.get("/runtime/process-info")
 def runtime_process_info() -> dict[str, Any]:
     import os
     import time
     from datetime import datetime
-    
+
     started_timestamp = getattr(app, "started_at", None)
     if started_timestamp is None:
         started_timestamp = time.time()
         app.started_at = started_timestamp
-        
+
     started_at_str = datetime.fromtimestamp(started_timestamp).isoformat()
-    
+
     return {
         "pid": os.getpid(),
         "port": int(os.getenv("JARVIS_BACKEND_PORT", "8000")),
@@ -187,7 +203,7 @@ class ProviderTextRequest(BaseModel):
 
 
 class FullPipelineTestRequest(BaseModel):
-    text: str = "Джарвис как дела?"
+    text: str = "Р”Р¶Р°СЂРІРёСЃ РєР°Рє РґРµР»Р°?"
 
 
 def envelope(data: Any, *, ok: bool = True, error: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -209,7 +225,7 @@ def command_envelope(result: dict[str, Any]) -> dict[str, Any]:
         "route": result.get("route"),
         "provider": result.get("provider"),
         "action": result.get("action") or result.get("route"),
-        "text": result.get("text") or result.get("response_text") or "Команда выполнена.",
+        "text": result.get("text") or result.get("response_text") or "РљРѕРјР°РЅРґР° РІС‹РїРѕР»РЅРµРЅР°.",
         "openrouter_called": bool(result.get("openrouter_called", False)),
         "fish_audio_called": bool(result.get("fish_audio_called", False)),
         "local_matched": bool(result.get("local_matched", False)),
@@ -267,7 +283,7 @@ def license_status() -> dict[str, Any]:
             "enabled": False,
             "blocking": False,
             "status": "disabled",
-            "message": "Лицензия отключена для локальной PC-версии.",
+            "message": "Р›РёС†РµРЅР·РёСЏ РѕС‚РєР»СЋС‡РµРЅР° РґР»СЏ Р»РѕРєР°Р»СЊРЅРѕР№ PC-РІРµСЂСЃРёРё.",
         }
     )
 
@@ -280,6 +296,34 @@ def voice_dependency_check() -> dict[str, Any]:
 @app.get("/voice/tts-status")
 def voice_tts_status() -> dict[str, Any]:
     return envelope(TTSService(get_settings()).status())
+
+
+@app.get("/debug/voice-provider-status")
+def debug_voice_provider_status() -> dict[str, Any]:
+    settings = get_settings()
+    env_status = env_debug_status(settings)
+    require_fish = bool(settings.tts_require_fish_audio or settings.voice_profile.strip().lower() == "jarvis style")
+    fish_key_present = bool(settings.fish_audio_api_key)
+    fish_voice_present = bool(settings.fish_audio_voice_id)
+    selected_provider = "fish_audio" if fish_key_present and fish_voice_present else "text_only"
+    fallback_blocked_reason = None
+    if require_fish:
+        fallback_blocked_reason = "jarvis_voice_lock"
+    elif not settings.tts_fallback_enabled:
+        fallback_blocked_reason = "tts_fallback_disabled"
+
+    return {
+        "ok": True,
+        "env_loaded": bool(env_status.get("env_loaded")),
+        "tts_primary": settings.tts_primary,
+        "require_fish_audio": require_fish,
+        "fallback_enabled": bool(settings.tts_fallback_enabled and not require_fish),
+        "fish_key_present": fish_key_present,
+        "fish_voice_id_present": fish_voice_present,
+        "selected_provider": selected_provider,
+        "fallback_blocked_reason": fallback_blocked_reason,
+        "fix": None if selected_provider == "fish_audio" else "РџСЂРѕРІРµСЂСЊС‚Рµ backend/.env",
+    }
 
 
 @app.get("/voice/offline-voices")
@@ -316,7 +360,8 @@ def voice_say(request: SayRequest) -> dict[str, Any]:
         "played": bool(result.get("played", False)),
         "fallback_used": bool(result.get("fallback_used", False)),
         "error": result.get("error"),
-        "fix": result.get("fix") or "Проверьте настройки голоса в .env.",
+        "error_type": result.get("error_type"),
+        "fix": result.get("fix") or "РџСЂРѕРІРµСЂСЊС‚Рµ РЅР°СЃС‚СЂРѕР№РєРё РіРѕР»РѕСЃР° РІ .env.",
     }
     return {
         **summary,
@@ -328,6 +373,96 @@ def voice_say(request: SayRequest) -> dict[str, Any]:
 @app.get("/debug/dependencies")
 def debug_dependencies() -> dict[str, Any]:
     return check_backend_dependencies()
+
+
+@app.get("/debug/network-status")
+def debug_network_status() -> dict[str, Any]:
+    import socket
+    import time
+    import httpx
+    import requests
+    from app.providers.openrouter import _fix_for, classify_openrouter_exception
+
+    dns_ok = False
+    tcp_ok = False
+    httpx_ok = False
+    requests_ok = False
+    status_code = None
+    error_type = None
+    fix = None
+    errors: dict[str, str | None] = {"dns": None, "tcp": None, "httpx": None, "requests": None}
+    started = time.perf_counter()
+
+    try:
+        socket.getaddrinfo("openrouter.ai", 443)
+        dns_ok = True
+    except Exception as e:
+        errors["dns"] = str(e)
+        error_type = "network_timeout"
+
+    if dns_ok:
+        try:
+            with socket.create_connection(("openrouter.ai", 443), timeout=10):
+                tcp_ok = True
+        except Exception as e:
+            errors["tcp"] = str(e)
+            error_type = classify_openrouter_exception(e)
+
+    if tcp_ok:
+        try:
+            timeout = httpx.Timeout(30.0, connect=10.0, read=20.0)
+            with httpx.Client(timeout=timeout, trust_env=True) as client:
+                response = client.get("https://openrouter.ai/api/v1/models")
+            status_code = response.status_code
+            httpx_ok = response.status_code == 200
+            if httpx_ok:
+                error_type = None
+            else:
+                error_type = "provider_error"
+                errors["httpx"] = f"HTTP {response.status_code}: {response.text[:200]}"
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
+            errors["httpx"] = str(e) or e.__class__.__name__
+            error_type = classify_openrouter_exception(e)
+        except Exception as e:
+            errors["httpx"] = str(e) or e.__class__.__name__
+            error_type = classify_openrouter_exception(e)
+
+    if not httpx_ok and dns_ok:
+        try:
+            response = requests.get(
+                "https://openrouter.ai/api/v1/models",
+                timeout=(10, 20),
+            )
+            status_code = response.status_code
+            requests_ok = response.status_code == 200
+            if requests_ok:
+                error_type = None
+            else:
+                error_type = "provider_error"
+                errors["requests"] = f"HTTP {response.status_code}: {response.text[:200]}"
+        except requests.exceptions.RequestException as e:
+            errors["requests"] = str(e) or e.__class__.__name__
+            error_type = classify_openrouter_exception(e)
+
+    if error_type:
+        fix = _fix_for(status_code, error_type)
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    ok = dns_ok and tcp_ok and (httpx_ok or requests_ok)
+
+    return {
+        "ok": ok,
+        "openrouter": {
+            "dns_ok": dns_ok,
+            "tcp_ok": tcp_ok,
+            "httpx_ok": httpx_ok,
+            "requests_ok": requests_ok,
+            "status_code": status_code,
+            "latency_ms": latency_ms,
+            "error_type": error_type,
+            "fix": fix,
+            "errors": errors,
+        },
+    }
 
 
 @app.get("/debug/startup")
@@ -387,8 +522,8 @@ def debug_env_status() -> dict[str, Any]:
 
 @app.post("/debug/test-openrouter")
 def debug_test_openrouter(request: ProviderTextRequest) -> dict[str, Any]:
-    text = request.text or "Скажи строго эту фразу: ГРОЗНЫЙ-777"
-    required = "ГРОЗНЫЙ-777" if "ГРОЗНЫЙ-777" in text else None
+    text = request.text or "РЎРєР°Р¶Рё СЃС‚СЂРѕРіРѕ СЌС‚Сѓ С„СЂР°Р·Сѓ: Р“Р РћР—РќР«Р™-777"
+    required = "Р“Р РћР—РќР«Р™-777" if "Р“Р РћР—РќР«Р™-777" in text else None
     return OpenRouterPlanner(get_settings()).test(text, must_contain=required)
 
 
@@ -415,7 +550,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
     started_or = time.perf_counter()
     if settings.openrouter_api_key:
         try:
-            or_test = OpenRouterPlanner(settings).test("Скажи строго эту фразу: ГРОЗНЫЙ-777", must_contain="ГРОЗНЫЙ-777")
+            or_test = OpenRouterPlanner(settings).test("РЎРєР°Р¶Рё СЃС‚СЂРѕРіРѕ СЌС‚Сѓ С„СЂР°Р·Сѓ: Р“Р РћР—РќР«Р™-777", must_contain="Р“Р РћР—РќР«Р™-777")
             or_ok = bool(or_test.get("ok"))
             or_msg = "OpenRouter connection test passed." if or_ok else f"OpenRouter connection test failed: {or_test.get('error_message')}"
             if or_test.get("fix"):
@@ -424,7 +559,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
             or_test = {"ok": False, "error_message": str(e), "error_type": "exception"}
             or_ok = False
             or_msg = f"OpenRouter exception during test: {str(e)}"
-            fixes.append("Проверьте интернет-соединение или настройки прокси.")
+            fixes.append("РџСЂРѕРІРµСЂСЊС‚Рµ РёРЅС‚РµСЂРЅРµС‚-СЃРѕРµРґРёРЅРµРЅРёРµ РёР»Рё РЅР°СЃС‚СЂРѕР№РєРё РїСЂРѕРєСЃРё.")
     else:
         or_test = {"ok": False, "error_type": "key_missing", "error_message": "OpenRouter API key is missing."}
         or_ok = False
@@ -443,7 +578,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
     orchestrator = AssistantOrchestrator(settings)
     try:
         ask_res = await orchestrator.ask(
-            text="Как тебя зовут?",
+            text="РљР°Рє С‚РµР±СЏ Р·РѕРІСѓС‚?",
             speak=True,
             source="diagnostic",
             context={"dry_run": True}
@@ -470,7 +605,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
     started_tts = time.perf_counter()
     try:
         tts = TTSService(settings)
-        tts_res = tts.speak("Тест.", dry_run=True)
+        tts_res = tts.speak("РўРµСЃС‚.", dry_run=True)
         tts_ok = bool(tts_res.get("ok"))
         tts_msg = "TTS synthesis test passed." if tts_ok else f"TTS synthesis test failed: {tts_res.get('error')}"
         if tts_res.get("fix"):
@@ -512,7 +647,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
 def debug_test_fish_audio(request: ProviderTextRequest) -> dict[str, Any]:
     settings = get_settings()
     started = time.perf_counter()
-    text = request.text or "Проверка голоса Джарвиса. Код семь семь семь."
+    text = request.text or "РџСЂРѕРІРµСЂРєР° РіРѕР»РѕСЃР° Р”Р¶Р°СЂРІРёСЃР°. РљРѕРґ СЃРµРјСЊ СЃРµРјСЊ СЃРµРјСЊ."
     result = TTSService(settings).speak(text)
     latency_ms = result.get("latency_ms")
     if latency_ms is None:
@@ -569,7 +704,7 @@ def voice_mic_diagnostics() -> dict[str, Any]:
     diagnostics = mic_diagnostics()
     default_dev = diagnostics.get("default_input_device")
     selected_id = default_dev.get("id") if default_dev else "default"
-    
+
     data = {
         "sounddevice_available": diagnostics.get("sounddevice_available"),
         "numpy_available": diagnostics.get("numpy_available"),
@@ -587,11 +722,11 @@ def voice_mic_diagnostics() -> dict[str, Any]:
 @app.post("/voice/test-capture")
 def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
     from app.voice.microphone import capture_audio, resolve_input_device, VoiceDependencyError
-    
+
     # Resolve device to get clean name
     dev_res = resolve_input_device(request.device_id)
     device_name = dev_res.get("device_name", "Unknown Device")
-    
+
     try:
         capture = capture_audio(
             device_id=request.device_id,
@@ -600,13 +735,13 @@ def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
         rms = capture.rms
         peak = capture.peak
         heard = rms > 0.005 or peak > 0.02
-        
+
         fix_msg = None
         error_type = None
         if not heard:
             error_type = "no_audio"
-            fix_msg = "Проверьте разрешение Windows для микрофона, уровень громкости и выбранное устройство."
-            
+            fix_msg = "РџСЂРѕРІРµСЂСЊС‚Рµ СЂР°Р·СЂРµС€РµРЅРёРµ Windows РґР»СЏ РјРёРєСЂРѕС„РѕРЅР°, СѓСЂРѕРІРµРЅСЊ РіСЂРѕРјРєРѕСЃС‚Рё Рё РІС‹Р±СЂР°РЅРЅРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ."
+
         data = {
             "ok": heard,
             "device_id": str(request.device_id),
@@ -620,24 +755,24 @@ def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
             "error_type": error_type,
             "fix": fix_msg
         }
-        
+
         err_envelope = None
         if not heard:
             err_envelope = {
                 "code": "NO_AUDIO_HEARD",
-                "message": "Микрофон не получает звук.",
+                "message": "РњРёРєСЂРѕС„РѕРЅ РЅРµ РїРѕР»СѓС‡Р°РµС‚ Р·РІСѓРє.",
                 "error_type": "no_audio",
                 "fix": fix_msg
             }
-            
+
         return envelope(data, ok=heard, error=err_envelope)
-        
+
     except Exception as exc:
         error_code = getattr(exc, "code", "CAPTURE_FAILED")
-        fix_msg = "Проверьте разрешение Windows для микрофона, уровень громкости и выбранное устройство."
+        fix_msg = "РџСЂРѕРІРµСЂСЊС‚Рµ СЂР°Р·СЂРµС€РµРЅРёРµ Windows РґР»СЏ РјРёРєСЂРѕС„РѕРЅР°, СѓСЂРѕРІРµРЅСЊ РіСЂРѕРјРєРѕСЃС‚Рё Рё РІС‹Р±СЂР°РЅРЅРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ."
         if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
-            fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
-            
+            fix_msg = f"РЈСЃС‚Р°РЅРѕРІРёС‚Рµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё: {exc.details['install_hint']}"
+
         data = {
             "ok": False,
             "device_id": str(request.device_id),
@@ -693,39 +828,39 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
             "voice.recording.completed",
             {"device_id": request.device_id, "transcript_available": bool(transcript)},
         )
-        
+
         if not result.get("ok", True):
             error_payload = {
                 "code": "VOICE_RECORD_ERROR",
                 "message": result.get("stt", {}).get("fix") or "Voice recording failed",
                 "error_type": result.get("stt", {}).get("error_type") or "CAPTURE_FAILED",
-                "fix": result.get("stt", {}).get("fix") or "Проверьте выбранный микрофон."
+                "fix": result.get("stt", {}).get("fix") or "РџСЂРѕРІРµСЂСЊС‚Рµ РІС‹Р±СЂР°РЅРЅС‹Р№ РјРёРєСЂРѕС„РѕРЅ."
             }
             return envelope(result, ok=False, error=error_payload)
-            
+
         return envelope(result, ok=result.get("ok", True))
     except Exception as exc:
         logger.exception("Exception inside voice_record_command endpoint")
         error_msg = str(exc)
         error_type = exc.__class__.__name__
-        fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
+        fix_msg = "РџСЂРѕРІРµСЂСЊС‚Рµ РІС‹Р±СЂР°РЅРЅС‹Р№ РјРёРєСЂРѕС„РѕРЅ, РґРѕСЃС‚СѓРї Windows Рє РјРёРєСЂРѕС„РѕРЅСѓ, СѓСЂРѕРІРµРЅСЊ РіСЂРѕРјРєРѕСЃС‚Рё, СЂР°Р·СЂРµС€РµРЅРёРµ РґР»СЏ desktop apps."
         if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
-            fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
-        
+            fix_msg = f"РЈСЃС‚Р°РЅРѕРІРёС‚Рµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё: {exc.details['install_hint']}"
+
         error_payload = {
             "code": "VOICE_RECORD_ERROR",
             "message": error_msg,
             "error_type": error_type,
             "fix": fix_msg
         }
-        
+
         fallback_data = {
             "final_status": "record_error",
             "capture": None,
             "stt": None,
             "assistant_result": None
         }
-        
+
         event_bus.emit("voice.error", {"code": "VOICE_RECORD_ERROR", "message": error_msg})
         return envelope(fallback_data, ok=False, error=error_payload)
 
@@ -737,7 +872,7 @@ def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -
     if not settings.listener_enabled and not reason:
         reason = "listener disabled by default"
         status_dict["data"]["reason"] = reason
-        
+
     return {
         "ok": ok,
         "data": status_dict["data"],
@@ -747,6 +882,31 @@ def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -
 
 @app.get("/voice/listener-status")
 def voice_listener_status() -> dict[str, Any]:
+    settings = get_settings()
+    listener_running = voice_listener._thread is not None and voice_listener._thread.is_alive()
+    if not settings.listener_enabled and not listener_running:
+        return {
+            "ok": True,
+            "data": {
+                "enabled": False,
+                "running": False,
+                "state": "stopped",
+                "device_id": str(settings.listener_device_id),
+                "device_name": None,
+                "wake_word_enabled": False,
+                "clap_enabled": False,
+                "last_trigger": None,
+                "last_transcript": None,
+                "last_ignored_reason": None,
+                "speaking": False,
+                "cooldown_until": None,
+                "metrics": {},
+                "safe_to_start": False,
+                "reason": "listener disabled by default",
+                "errors": [],
+                "warnings": []
+            }
+        }
     status_data = voice_listener.status()
     return make_listener_response(status_data["ok"])
 
@@ -767,7 +927,7 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
         voice_listener.errors = [gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}"]
         voice_listener.state = "stopped"
         return make_listener_response(False, error_payload)
-        
+
     result = voice_listener.start(
         device_id=request.device_id,
         wake_word_enabled=request.wake_word,
@@ -786,10 +946,10 @@ def voice_listener_stop_post() -> dict[str, Any]:
 @app.post("/voice/calibrate-mic")
 def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
     from app.voice.microphone import capture_audio, resolve_input_device
-    
+
     dev_res = resolve_input_device(request.device_id)
     device_name = dev_res.get("device_name", "Unknown Device")
-    
+
     if not dev_res["ok"]:
         return {
             "ok": False,
@@ -811,7 +971,7 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
             channels=1
         )
         noise_floor_rms = silence_capture.rms
-        
+
         speech_capture = capture_audio(
             device_id=request.device_id,
             duration_seconds=request.speech_seconds,
@@ -820,13 +980,13 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
         )
         speech_rms = speech_capture.rms
         speech_peak = speech_capture.peak
-        
+
         heard_signal = speech_rms > 0.005 or speech_peak > 0.02
         recommended = max(0.003, noise_floor_rms * 1.5)
-        
+
         fixes = []
         if not heard_signal:
-            fixes.append("Увеличьте чувствительность микрофона в настройках Windows или выберите другое устройство.")
+            fixes.append("РЈРІРµР»РёС‡СЊС‚Рµ С‡СѓРІСЃС‚РІРёС‚РµР»СЊРЅРѕСЃС‚СЊ РјРёРєСЂРѕС„РѕРЅР° РІ РЅР°СЃС‚СЂРѕР№РєР°С… Windows РёР»Рё РІС‹Р±РµСЂРёС‚Рµ РґСЂСѓРіРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ.")
 
         res = {
             "ok": True,
@@ -850,35 +1010,13 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
             "speech_peak": 0.0,
             "heard_signal": False,
             "recommended_min_rms_threshold": 0.003,
-            "fixes": [f"Ошибка калибровки: {exc}"]
+            "fixes": [f"РћС€РёР±РєР° РєР°Р»РёР±СЂРѕРІРєРё: {exc}"]
         }
 
 
 @app.post("/voice/start-listener")
-def voice_start_listener(request: ListenerRequest) -> dict[str, Any]:
-    gate_res = voice_listener.check_safe_start(request.device_id)
-    if not gate_res["safe_to_start"]:
-        error_payload = {
-            "code": "SAFE_GATE_BLOCKED",
-            "message": gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}",
-            "details": {
-                "failed_check": gate_res["failed_check"],
-                "fix": gate_res["fix"],
-                "checks": gate_res["checks"]
-            }
-        }
-        voice_listener.errors = [gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}"]
-        voice_listener.state = "stopped"
-        return make_listener_response(False, error_payload)
-        
-    result = voice_listener.start(
-        device_id=request.device_id,
-        wake_word_enabled=request.wake_word,
-        clap_enabled=request.clap,
-        force_start=True
-    )
-    event_bus.emit("voice.listener.started", result.get("data", {}))
-    return make_listener_response(result.get("ok", True))
+def voice_start_listener(request: ListenerStartRequest) -> dict[str, Any]:
+    return voice_listener_start_post(request)
 
 
 @app.post("/voice/stop-listener")
@@ -1088,7 +1226,7 @@ def diagnostics_scenario_test(request: ScenarioTestRequest) -> dict[str, Any]:
     return envelope(
         None,
         ok=False,
-        error={"code": "UNKNOWN_SCENARIO", "message": "Сценарий не найден.", "details": {"scenario": request.scenario}},
+        error={"code": "UNKNOWN_SCENARIO", "message": "РЎС†РµРЅР°СЂРёР№ РЅРµ РЅР°Р№РґРµРЅ.", "details": {"scenario": request.scenario}},
     )
 
 

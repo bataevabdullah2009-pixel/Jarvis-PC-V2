@@ -286,9 +286,9 @@ class Settings:
     resemble_project_id: str | None = None
     resemble_voice_id: str | None = None
     tts_primary: str = "fish_audio"
-    tts_fallback_enabled: bool = True
+    tts_fallback_enabled: bool = False
     tts_fallback: str = "pyttsx3"
-    tts_require_fish_audio: bool = False
+    tts_require_fish_audio: bool = True
     tts_timeout_seconds: int = 25
     tts_pyttsx3_voice_id: str | None = None
     tts_pyttsx3_rate: int = 175
@@ -304,10 +304,10 @@ class Settings:
     max_triggers_per_minute: int = 6
     openrouter_max_tokens: int = 180
     openrouter_temperature: float = 0.4
-    openrouter_connect_timeout: int = 4
-    openrouter_read_timeout: int = 8
-    openrouter_total_timeout: int = 10
-    openrouter_max_retries: int = 0
+    openrouter_connect_timeout: int = 10
+    openrouter_read_timeout: int = 20
+    openrouter_total_timeout: int = 30
+    openrouter_max_retries: int = 1
     allowed_apps: dict[str, list[str]] = field(
         default_factory=lambda: {
             "telegram": ["telegram", "Telegram.exe"],
@@ -347,6 +347,10 @@ class Settings:
         settings.tts_fallback = env_value("JARVIS_TTS_FALLBACK", "TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
         settings.tts_fallback_enabled = env_bool("JARVIS_TTS_FALLBACK_ENABLED", "TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
         settings.tts_require_fish_audio = env_bool("JARVIS_TTS_REQUIRE_FISH_AUDIO", "TTS_REQUIRE_FISH_AUDIO", "JARVIS_VOICE_LOCK", default=settings.tts_require_fish_audio)
+        if settings.voice_profile.strip().lower() == "jarvis style" or settings.tts_require_fish_audio:
+            settings.tts_primary = "fish_audio"
+            settings.tts_require_fish_audio = True
+            settings.tts_fallback_enabled = False
         try:
             settings.tts_timeout_seconds = int(env_value("TTS_TIMEOUT_SECONDS", default=str(settings.tts_timeout_seconds)) or settings.tts_timeout_seconds)
         except ValueError:

@@ -43,6 +43,7 @@ def test_voice_fallback_allowed() -> None:
     the system uses the next available fallback (e.g. pyttsx3).
     """
     settings = Settings()
+    settings.voice_profile = "Default"
     settings.tts_primary = "fish_audio"
     settings.tts_require_fish_audio = False
     settings.tts_fallback_enabled = True
@@ -192,5 +193,7 @@ def test_openrouter_fast_defaults() -> None:
     settings = Settings.load()
     
     assert settings.openrouter_max_tokens <= 200
-    assert settings.openrouter_max_retries == 0
-    assert settings.openrouter_total_timeout <= 10
+    assert settings.openrouter_connect_timeout == 10
+    assert settings.openrouter_read_timeout == 20
+    assert settings.openrouter_total_timeout == 30
+    assert settings.openrouter_max_retries == 1

@@ -136,6 +136,7 @@ def _normalize(result: dict[str, Any], text: str, provider: str) -> dict[str, An
     ok = bool(result.get("ok", spoken or status in {"completed", "dry_run"}))
     return {
         "requested": True,
+        "called": bool(result.get("called", ok or provider != "text_only")),
         "ok": ok,
         "provider": provider,
         "mode": provider,
@@ -162,10 +163,18 @@ class SpeechOrchestrator:
         self.edge = EdgeTTSProvider(settings)
         self.offline = OfflineTTS(settings)
 
+    def _fish_required(self) -> bool:
+        return bool(
+            self.settings.tts_require_fish_audio
+            or self.settings.voice_profile.strip().lower() == "jarvis style"
+        )
+
     def available_providers(self) -> list[str]:
         providers = []
         if self.fish.available():
             providers.append("fish_audio")
+        if self._fish_required() or not self.settings.tts_fallback_enabled:
+            return providers
         if self.resemble.available():
             providers.append("resemble")
         if self.edge.available():
@@ -182,7 +191,8 @@ class SpeechOrchestrator:
         safe_text = safe_text[:500]
 
         started = time.perf_counter()
-        primary = self.settings.tts_primary or "fish_audio"
+        voice_locked = self._fish_required()
+        primary = "fish_audio" if voice_locked else (self.settings.tts_primary or "fish_audio")
 
         logger.info("[SPEECH] Primary TTS requested: %s", primary)
 
@@ -222,17 +232,22 @@ class SpeechOrchestrator:
         if not primary_fix:
             if primary == "fish_audio":
                 primary_fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в .env"
-                fish_error_type = "fish_key_missing" if not self.settings.fish_audio_api_key else "fish_voice_id_missing"
+                if not self.settings.fish_audio_api_key:
+                    fish_error_type = "fish_key_missing"
+                elif not self.settings.fish_audio_voice_id:
+                    fish_error_type = "fish_voice_id_missing"
+                else:
+                    fish_error_type = "fish_audio_unavailable"
             else:
                 primary_fix = f"Основной голос {primary} недоступен. Ошибка: {last_error}."
 
         # If tts_require_fish_audio is True, we must NOT use any fallbacks other than text_only!
-        if self.settings.tts_require_fish_audio:
+        if voice_locked:
             logger.info("[SPEECH] tts_require_fish_audio is True. Skipping non-Fish fallbacks.")
             res = self._text_only(safe_text, f"Primary voice {primary} failed and other voice providers are disallowed by tts_require_fish_audio", started, primary_fix)
             res["provider"] = "text_only"
-            if fish_error_type:
-                res["error_type"] = fish_error_type
+            res["error_type"] = fish_error_type or "fish_audio_unavailable"
+            res["fallback_used"] = False
             return res
 
         if not self.settings.tts_fallback_enabled:
@@ -292,7 +307,7 @@ class SpeechOrchestrator:
                     play_audio_sync(synth["audio"], synth["format"])
                 else:
                     play_audio_background(synth["audio"], synth["format"])
-                return _normalize({**synth, "spoken": True, "played": True}, text, "fish_audio")
+                return _normalize({**synth, "spoken": True, "played": True, "status": "completed"}, text, "fish_audio")
             return _normalize(synth, text, "fish_audio")
 
         elif provider == "resemble":
@@ -346,8 +361,8 @@ class SpeechOrchestrator:
         return self.say(text)
 
     def status(self) -> dict[str, Any]:
-        voice_locked = self.settings.tts_require_fish_audio
-        primary = self.settings.tts_primary or "fish_audio"
+        voice_locked = self._fish_required()
+        primary = "fish_audio" if voice_locked else (self.settings.tts_primary or "fish_audio")
         fallback_enabled = self.settings.tts_fallback_enabled and not voice_locked
         
         fallback_used = False

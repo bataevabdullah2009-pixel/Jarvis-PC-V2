@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import time
 import logging
@@ -34,21 +34,21 @@ class VoiceListener:
     def __init__(self) -> None:
         if getattr(self, "_initialized", False):
             return
-        
+
         self.state = "stopped"  # stopped, idle, listening_for_trigger, triggered, recording_command, transcribing, sending_to_assistant, speaking, cooldown, error
         self.device_id = "default"
         self.device_name = "Default Device"
         self.wake_word_enabled = True
         self.clap_enabled = True
-        
+
         self.last_trigger = ""
         self.last_transcript = ""
         self.last_ignored_reason = ""
         self.cooldown_until = 0.0
-        
+
         self.errors: list[str] = []
         self.warnings: list[str] = []
-        
+
         # Metrics
         self.metrics = {
             "audio_windows": 0,
@@ -58,11 +58,11 @@ class VoiceListener:
             "no_audio_events": 0,
             "self_echo_blocks": 0
         }
-        
+
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._trigger_timestamps: list[float] = []
-        
+
         self._initialized = True
 
     def check_safe_start(self, device_id: str = "default") -> dict[str, Any]:
@@ -71,14 +71,14 @@ class VoiceListener:
         Returns a dict indicating if it's safe to start, the first failed check, the recommended fix, and all checks.
         """
         settings = get_settings()
-        
+
         # 1. Backend alive
         backend_alive = True
-        
+
         # 2. Selected device exists
         dev_res = resolve_input_device(device_id)
         device_exists = bool(dev_res.get("ok", False))
-        
+
         # 3. Microphone test (heard_signal = True)
         microphone_ok = False
         if device_exists:
@@ -89,20 +89,22 @@ class VoiceListener:
             except Exception as e:
                 logger.error("[LISTENER] Microphone test exception: %s", e)
                 microphone_ok = False
-        
+
         # 4. STT configured
         stt_conf = stt_dependency_status(settings)
         stt_configured = bool(stt_conf.get("configured", False))
-        
+
         # 5. Anti-echo available
         anti_echo_available = True
-        
-        # 6. No current TTS speaking
-        no_current_tts_speaking = not is_speaking_now()
-        
+
+        # 6. No current TTS speaking and OpenRouter not busy
+        from app.providers.openrouter import OpenRouterPlanner
+        ai_busy = getattr(OpenRouterPlanner, "_busy", False)
+        no_current_tts_speaking = not is_speaking_now() and not ai_busy
+
         # 7. No other listener running
         no_other_listener_running = self.state == "stopped" or self._thread is None or not self._thread.is_alive()
-        
+
         checks = {
             "backend_alive": backend_alive,
             "device_exists": device_exists,
@@ -112,28 +114,28 @@ class VoiceListener:
             "no_current_tts_speaking": no_current_tts_speaking,
             "no_other_listener_running": no_other_listener_running
         }
-        
+
         safe_to_start = all(checks.values())
         failed_check = None
         fix = None
-        
+
         if not safe_to_start:
             if not device_exists:
                 failed_check = "device_not_found"
-                fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
+                fix = dev_res.get("fix") or f"Р’С‹Р±СЂР°РЅРЅРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ '{device_id}' РЅРµ РЅР°Р№РґРµРЅРѕ."
             elif not microphone_ok:
                 failed_check = "microphone_no_audio"
-                fix = "Микрофон не улавливает сигнал. Проверьте подключение, настройки громкости, доступы Windows и запустите калибровку (run calibration)."
+                fix = "РњРёРєСЂРѕС„РѕРЅ РЅРµ СѓР»Р°РІР»РёРІР°РµС‚ СЃРёРіРЅР°Р». РџСЂРѕРІРµСЂСЊС‚Рµ РїРѕРґРєР»СЋС‡РµРЅРёРµ, РЅР°СЃС‚СЂРѕР№РєРё РіСЂРѕРјРєРѕСЃС‚Рё, РґРѕСЃС‚СѓРїС‹ Windows Рё Р·Р°РїСѓСЃС‚РёС‚Рµ РєР°Р»РёР±СЂРѕРІРєСѓ (run calibration)."
             elif not stt_configured:
                 failed_check = "stt_not_configured"
-                fix = "STT (Vosk) не настроен. Пожалуйста, скачайте модель Vosk и укажите правильный путь в настройках."
+                fix = "STT (Vosk) РЅРµ РЅР°СЃС‚СЂРѕРµРЅ. РџРѕР¶Р°Р»СѓР№СЃС‚Р°, СЃРєР°С‡Р°Р№С‚Рµ РјРѕРґРµР»СЊ Vosk Рё СѓРєР°Р¶РёС‚Рµ РїСЂР°РІРёР»СЊРЅС‹Р№ РїСѓС‚СЊ РІ РЅР°СЃС‚СЂРѕР№РєР°С…."
             elif not no_current_tts_speaking:
                 failed_check = "tts_speaking"
-                fix = "Пожалуйста, подождите, пока Джарвис договорит фразу."
+                fix = "РџРѕР¶Р°Р»СѓР№СЃС‚Р°, РїРѕРґРѕР¶РґРёС‚Рµ, РїРѕРєР° Р”Р¶Р°СЂРІРёСЃ РґРѕРіРѕРІРѕСЂРёС‚ С„СЂР°Р·Сѓ."
             elif not no_other_listener_running:
                 failed_check = "already_running"
-                fix = "Слушатель уже запущен."
-        
+                fix = "РЎР»СѓС€Р°С‚РµР»СЊ СѓР¶Рµ Р·Р°РїСѓС‰РµРЅ."
+
         return {
             "safe_to_start": safe_to_start,
             "failed_check": failed_check,
@@ -153,14 +155,14 @@ class VoiceListener:
             self.clap_enabled = clap_enabled
             self.errors = []
             self.warnings = []
-            
+
             # Resolve device info first
             dev_res = resolve_input_device(device_id)
             if not dev_res["ok"]:
                 self.state = "error"
                 self.errors.append(dev_res["fix"] or "Selected input device not found.")
                 return self.status()
-                
+
             self.device_name = dev_res["device_name"]
 
             # Safe Start Gate checks (always verified on starting)
@@ -203,7 +205,7 @@ class VoiceListener:
             self.state = "idle"
             self._thread = threading.Thread(target=self.run_loop, daemon=True)
             self._thread.start()
-            
+
             # Sync listener_state in wake.py
             try:
                 from app.voice.wake import listener_state
@@ -222,13 +224,13 @@ class VoiceListener:
         """Gracefully stops the background listening thread."""
         logger.info("[LISTENER] stop() requested.")
         self._stop_event.set()
-        
+
         if self._thread:
             self._thread.join(timeout=3.0)
             self._thread = None
-            
+
         self.state = "stopped"
-        
+
         # Sync listener_state in wake.py
         try:
             from app.voice.wake import listener_state
@@ -245,12 +247,37 @@ class VoiceListener:
     def status(self) -> dict[str, Any]:
         """Returns the full listener status structured response."""
         settings = get_settings()
+        listener_running = self.state != "stopped" and self._thread is not None and self._thread.is_alive()
+        if not settings.listener_enabled and not listener_running:
+            return {
+                "ok": True,
+                "data": {
+                    "enabled": False,
+                    "running": False,
+                    "state": "stopped",
+                    "device_id": str(self.device_id),
+                    "device_name": self.device_name,
+                    "wake_word_enabled": self.wake_word_enabled,
+                    "clap_enabled": self.clap_enabled,
+                    "last_trigger": self.last_trigger,
+                    "last_transcript": self.last_transcript,
+                    "last_ignored_reason": self.last_ignored_reason,
+                    "speaking": is_speaking_now(),
+                    "cooldown_until": None,
+                    "metrics": dict(self.metrics),
+                    "safe_to_start": False,
+                    "reason": "listener disabled by default",
+                    "errors": [],
+                    "warnings": []
+                }
+            }
+
         gate_res = self.check_safe_start(self.device_id)
-        
+
         reason = None
         if not settings.listener_enabled:
             reason = "listener disabled by default"
-            
+
         return {
             "ok": len(self.errors) == 0,
             "data": {
@@ -334,7 +361,7 @@ class VoiceListener:
         """Captures a short window of audio to detect clap or wake words."""
         settings = get_settings()
         self.metrics["audio_windows"] += 1
-        
+
         # Wake word requires 1.5s window, clap can be checked in the same window
         duration = 1.5
         try:
@@ -365,7 +392,7 @@ class VoiceListener:
     def detect_trigger(self, capture: Any) -> None:
         """Determines if a clap or wake-word was received."""
         settings = get_settings()
-        
+
         # 1. Clap detection
         if self.clap_enabled:
             if capture.peak > settings.clap_threshold:
@@ -382,22 +409,22 @@ class VoiceListener:
         if self.wake_word_enabled:
             self.state = "transcribing"
             event_bus.emit("voice.listener.state", {"state": self.state})
-            
+
             stt = STTService(settings)
             stt_res = stt.transcribe(capture)
             transcript = stt_res.get("transcript")
-            
+
             if transcript:
                 norm_t = transcript.lower()
                 wake_keywords = [w.strip().lower() for w in settings.wake_words.split(",")]
-                
+
                 # Check for direct matches or substrings
                 matched_word = None
                 for kw in wake_keywords:
                     if kw in norm_t:
                         matched_word = kw
                         break
-                        
+
                 if matched_word:
                     logger.info("[LISTENER] Wake word '%s' detected in transcript: '%s'", matched_word, transcript)
                     self.last_trigger = f"wake_word:{matched_word}"
@@ -416,10 +443,10 @@ class VoiceListener:
         settings = get_settings()
         self.state = "recording_command"
         event_bus.emit("voice.listener.state", {"state": self.state})
-        
+
         rec_duration = settings.command_record_seconds
         logger.info("[LISTENER] Triggered! Recording full command for %ds...", rec_duration)
-        
+
         try:
             capture = capture_audio(
                 device_id=self.device_id,
@@ -447,11 +474,11 @@ class VoiceListener:
         settings = get_settings()
         self.state = "transcribing"
         event_bus.emit("voice.listener.state", {"state": self.state})
-        
+
         stt = STTService(settings)
         stt_res = stt.transcribe(capture)
         transcript = stt_res.get("transcript")
-        
+
         if not transcript:
             logger.info("[LISTENER] STT returned empty transcript for command.")
             self.state = "listening_for_trigger"
@@ -468,7 +495,7 @@ class VoiceListener:
             self.last_ignored_reason = guard_res["reason"] or "echo"
             if guard_res["self_echo_blocked"]:
                 self.metrics["ignored_self_audio"] += 1
-            
+
             if guard_res["stop_listener"]:
                 self.state = "error"
                 self.errors.append("Self-echo loop detected. Lower speaker volume or use headphones.")
@@ -484,10 +511,10 @@ class VoiceListener:
         """Submits the transcribed text command to the assistant orchestrator."""
         self.state = "sending_to_assistant"
         event_bus.emit("voice.listener.state", {"state": self.state})
-        
+
         settings = get_settings()
         orchestrator = AssistantOrchestrator(settings)
-        
+
         logger.info("[LISTENER] Submitting command to AssistantOrchestrator: '%s'", transcript)
         self.metrics["commands_sent"] += 1
 
@@ -516,15 +543,15 @@ class VoiceListener:
         """Locks listener processing for a brief window."""
         self.state = "cooldown"
         event_bus.emit("voice.listener.state", {"state": self.state})
-        
+
         settings = get_settings()
         cooldown_sec = float(settings.cooldown_ms) / 1000.0
         self.cooldown_until = time.time() + cooldown_sec
         logger.info("[LISTENER] Cooldown activated for %.1fs (Reason: %s)", cooldown_sec, reason)
         event_bus.emit("listener.cooldown.started", {"duration_ms": settings.cooldown_ms})
-        
+
         time.sleep(cooldown_sec)
-        
+
         self.state = "listening_for_trigger"
         event_bus.emit("voice.listener.state", {"state": self.state})
 

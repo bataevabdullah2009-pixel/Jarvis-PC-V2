@@ -166,8 +166,8 @@ export function MinimalUI({
         if (errorType === "rate_limited" || statusCode === 429) {
           return "rate limited";
         }
-        if (errorType === "timeout") {
-          return "timeout";
+        if (errorType === "timeout" || errorType === "network_timeout" || errorType === "tls_handshake_timeout" || errorType === "ssl_error") {
+          return "OpenRouter network timeout";
         }
         if (statusCode === 200 || (!errorType && !statusCode && state.lastResult.ok)) {
           return "called / 200 OK";

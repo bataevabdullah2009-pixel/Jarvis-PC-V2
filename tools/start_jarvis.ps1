@@ -1,221 +1,245 @@
-# start_jarvis.ps1 - Core launcher for JARVIS PC V2
-# Implements full lifetime stabilization, port protection, dependency scanning
-
 $ErrorActionPreference = "Stop"
 
-# 1. Determine project root
-$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+function Write-Step {
+    param([string]$Message)
+    Write-Host ""
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
 
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "    JARVIS PC V2 - MAIN LAUNCHER STABILIZER" -ForegroundColor Green
-Write-Host "==================================================" -ForegroundColor Cyan
+function Stop-ProcessTree {
+    param([System.Diagnostics.Process]$Process)
+    if ($null -eq $Process) {
+        return
+    }
+    if ($Process.HasExited) {
+        return
+    }
+    try {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Host "Could not stop process $($Process.Id): $_" -ForegroundColor Yellow
+    }
+}
 
-# Set Environment variables
-$env:JARVIS_FRONTEND_URL = "http://127.0.0.1:5173"
-$env:JARVIS_BACKEND_PORT = "8000"
-$env:JARVIS_FRONTEND_MODE = "dev"
-$env:JARVIS_PROJECT_ROOT = $root
-$env:JARVIS_LAUNCHER = "START_JARVIS"
+function Get-ListeningPids {
+    param([int]$Port)
+    $pids = @()
 
-# 2. Cleanup old JARVIS processes
-Write-Host "Cleaning up old JARVIS processes..." -ForegroundColor Yellow
-& "$PSScriptRoot\kill_jarvis_processes.ps1"
-
-# 3. Port 8000 Lock Protection (Task 4)
-Write-Host "Verifying Port 8000 availability..." -ForegroundColor Yellow
-$netstatOut = netstat -ano | findstr :8000
-if ($netstatOut) {
-    Write-Host "Port 8000 is occupied. Analyzing processes..." -ForegroundColor Yellow
-    foreach ($line in $netstatOut) {
-        if ($line -match "\s+LISTENING\s+(\d+)$" -or $line -match "\s+(\d+)$") {
-            $pidStr = $Matches[1].Trim()
-            $pidVal = 0
-            if ([int]::TryParse($pidStr, [ref]$pidVal) -and $pidVal -gt 0) {
-                $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
-                if ($proc) {
-                    $procName = $proc.ProcessName
-                    $isJarvisRelated = ($procName -match "^(python|node|electron|JarvisBackend|JARVIS-PC-V2|JARVIS PC V2)$")
-                    
-                    if ($isJarvisRelated) {
-                        Write-Host "Found active JARVIS process: '$procName' (PID $pidVal) on port 8000. Terminating..." -ForegroundColor Yellow
-                        Stop-Process -Id $pidVal -Force -ErrorAction SilentlyContinue
-                    } else {
-                        Write-Host "WARNING: Unknown process '$procName' (PID $pidVal) is holding port 8000!" -ForegroundColor Red
-                        $choice = Read-Host "Do you want to terminate this process to free port 8000? (Y/N)"
-                        if ($choice -eq "Y" -or $choice -eq "y") {
-                            Write-Host "Terminating process '$procName' (PID $pidVal)..." -ForegroundColor Yellow
-                            Stop-Process -Id $pidVal -Force -ErrorAction SilentlyContinue
-                        } else {
-                            Write-Error "Port 8000 is occupied by unknown process '$procName'. Cannot start."
-                            exit 1
-                        }
-                    }
-                }
+    try {
+        $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+        foreach ($connection in $connections) {
+            if ($connection.OwningProcess -gt 0) {
+                $pids += [int]$connection.OwningProcess
             }
         }
     }
-    
-    # Wait for OS to release socket
+    catch {
+        Write-Host "Get-NetTCPConnection unavailable, falling back to netstat." -ForegroundColor Yellow
+    }
+
+    $netstatRows = netstat -ano
+    foreach ($row in $netstatRows) {
+        if ($row -notmatch ":$Port\s+") {
+            continue
+        }
+        if ($row -notmatch "LISTENING") {
+            continue
+        }
+        if ($row -match "\s+(\d+)\s*$") {
+            $pidValue = [int]$Matches[1]
+            if ($pidValue -gt 0) {
+                $pids += $pidValue
+            }
+        }
+    }
+
+    return $pids | Select-Object -Unique
+}
+
+function Clear-BackendPort {
+    param([int]$Port)
+    Write-Step "Checking port $Port"
+    $listeningPids = @(Get-ListeningPids -Port $Port)
+
+    if ($listeningPids.Count -eq 0) {
+        Write-Host "Port $Port is free. TIME_WAIT/PID 0 rows are ignored." -ForegroundColor Green
+        return
+    }
+
+    foreach ($pidValue in $listeningPids) {
+        $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            continue
+        }
+
+        $name = $process.ProcessName
+        $jarvisProcess = $name -match "^(python|pythonw|node|electron|JarvisBackend|JARVIS-PC-V2|JARVIS PC V2)$"
+        if (-not $jarvisProcess) {
+            throw "Port $Port is held by non-JARVIS process '$name' (PID $pidValue). Close it manually and run START_JARVIS.bat again."
+        }
+
+        Write-Host "Stopping stale JARVIS LISTENING process '$name' PID $pidValue on port $Port." -ForegroundColor Yellow
+        Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+    }
+
     Start-Sleep -Seconds 2
-    
-    # Check again
-    $netstatCheck = netstat -ano | findstr :8000
-    if ($netstatCheck) {
-        Write-Host "WARNING: Port 8000 is still occupied (possibly by a Windows kernel ghost socket leak)." -ForegroundColor Red
-        Write-Host "Automatically falling back to Port 8001 for this session!" -ForegroundColor Yellow
-        $env:JARVIS_BACKEND_PORT = "8001"
-    } else {
-        Write-Host "Port 8000 is now successfully free!" -ForegroundColor Green
+    $remaining = @(Get-ListeningPids -Port $Port)
+    if ($remaining.Count -gt 0) {
+        throw "Port $Port is still occupied by LISTENING PID(s): $($remaining -join ', ')."
     }
-} else {
-    Write-Host "Port 8000 is free." -ForegroundColor Green
+
+    Write-Host "Port $Port is free." -ForegroundColor Green
 }
 
-# Set Vite backend base URL dynamically
-$env:VITE_JARVIS_API_BASE = "http://127.0.0.1:$env:JARVIS_BACKEND_PORT"
+function Wait-HttpOk {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds,
+        [string]$Name
+    )
 
-# 4. Perform Git Pull
-Write-Host "Pulling latest changes from git repository..." -ForegroundColor Yellow
-try {
-    git pull
-} catch {
-    Write-Host "Warning: Git pull failed. Starting with local copy." -ForegroundColor Yellow
-}
-
-# 5. Check backend\.env
-Write-Host "Verifying backend configuration environment (.env)..." -ForegroundColor Yellow
-if (!(Test-Path "$root\backend\.env")) {
-    if (Test-Path "$root\.env") {
-        Write-Host "Copying .env from project root to backend directory..." -ForegroundColor Green
-        Copy-Item -Path "$root\.env" -Destination "$root\backend\.env" -Force
-    } elseif (Test-Path "$root\.env.example") {
-        Write-Host "Creating default backend .env from .env.example..." -ForegroundColor Green
-        Copy-Item -Path "$root\.env.example" -Destination "$root\backend\.env" -Force
-    } else {
-        Write-Host "Warning: No .env configuration file found!" -ForegroundColor Red
-    }
-}
-
-# 6. Verify Backend dependencies
-Write-Host "Verifying backend python dependencies..." -ForegroundColor Yellow
-try {
-    python -c "import fastapi, uvicorn, pydantic, dotenv, sounddevice, pyttsx3, pygame, anyio" 2>$null
-    Write-Host "[+] Python packages are satisfied." -ForegroundColor Green
-} catch {
-    Write-Host "Missing required packages. Installing from requirements.txt..." -ForegroundColor Yellow
-    python -m pip install -r "$root\backend\requirements.txt"
-}
-
-# 7. Verify Frontend dependencies
-Write-Host "Verifying frontend node dependencies..." -ForegroundColor Yellow
-if (!(Test-Path "$root\frontend\node_modules")) {
-    Write-Host "node_modules not found in frontend. Installing dependencies via npm..." -ForegroundColor Yellow
-    $oldDir = Get-Location
-    Set-Location "$root\frontend"
-    npm.cmd install
-    Set-Location $oldDir
-    Write-Host "[+] Frontend packages installed successfully." -ForegroundColor Green
-} else {
-    Write-Host "[+] Node packages are satisfied." -ForegroundColor Green
-}
-
-# 8. Start Backend in separate window
-Write-Host "Launching FastAPI Backend..." -ForegroundColor Yellow
-$backendProc = Start-Process cmd -ArgumentList "/c title JARVIS Backend && python run_backend.py" -WorkingDirectory "$root\backend" -PassThru -WindowStyle Normal
-
-# 9. Poll Backend health (max 20 seconds)
-Write-Host "Waiting for backend to become ready..." -ForegroundColor Yellow
-$backendReady = $false
-$maxRetries = 20
-for ($i = 1; $i -le $maxRetries; $i++) {
-    try {
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$env:JARVIS_BACKEND_PORT/health" -TimeoutSec 1 -ErrorAction Stop
-        if ($response.ok -eq $true -or $response.status -eq "ok" -or $response.data.status -eq "ok") {
-            $backendReady = $true
-            Write-Host "Backend is ready after $i seconds!" -ForegroundColor Green
-            break
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+                Write-Host "$Name is ready: $Url" -ForegroundColor Green
+                return $true
+            }
+        }
+        catch {
+            Start-Sleep -Milliseconds 700
         }
     }
-    catch {
-        # ignore and sleep
+
+    return $false
+}
+
+function Ensure-BackendEnv {
+    param([string]$Root)
+    $backendEnv = Join-Path $Root "backend\.env"
+    $rootEnv = Join-Path $Root ".env"
+
+    if (Test-Path $backendEnv) {
+        Write-Host "backend\.env found." -ForegroundColor Green
+        return
     }
-    Write-Host "Polling backend health ($i/$maxRetries)..." -ForegroundColor Gray
-    Start-Sleep -Seconds 1
+
+    if (Test-Path $rootEnv) {
+        Copy-Item -LiteralPath $rootEnv -Destination $backendEnv -Force
+        Write-Host "backend\.env was created from root .env." -ForegroundColor Yellow
+        return
+    }
+
+    throw "backend\.env is missing. Create it from .env.example and add OpenRouter/Fish Audio keys."
 }
 
-if (-not $backendReady) {
-    Write-Host "==================================================" -ForegroundColor Red
-    Write-Host "ERROR: Backend failed to respond within 20 seconds!" -ForegroundColor Red
-    Write-Host "==================================================" -ForegroundColor Red
-    if ($backendProc) { Stop-Process -Id $backendProc.Id -Force -ErrorAction SilentlyContinue }
-    & "$PSScriptRoot\kill_jarvis_processes.ps1"
-    exit 1
-}
-
-# 10. Start Frontend Dev Server (Vite) in separate window
-Write-Host "Launching Vite Frontend Dev Server..." -ForegroundColor Yellow
-$frontendProc = Start-Process cmd -ArgumentList "/c title JARVIS Frontend Dev && npm.cmd run dev" -WorkingDirectory "$root\frontend" -PassThru -WindowStyle Normal
-
-# 11. Poll Frontend health (max 20 seconds)
-Write-Host "Waiting for frontend dev server to become ready..." -ForegroundColor Yellow
-$frontendReady = $false
-for ($i = 1; $i -le $maxRetries; $i++) {
+function Ensure-BackendDependencies {
+    param([string]$Root)
+    Push-Location (Join-Path $Root "backend")
     try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
-        if ($response.StatusCode -eq 200) {
-            $frontendReady = $true
-            Write-Host "Frontend dev server is ready after $i seconds!" -ForegroundColor Green
-            break
+        python -c "import fastapi, uvicorn, pydantic, dotenv, httpx, requests, anyio" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Backend Python dependencies are available." -ForegroundColor Green
+            return
         }
+        Write-Host "Installing backend dependencies..." -ForegroundColor Yellow
+        python -m pip install -r requirements.txt
     }
-    catch {
-        # ignore and sleep
+    finally {
+        Pop-Location
     }
-    Write-Host "Polling frontend health ($i/$maxRetries)..." -ForegroundColor Gray
-    Start-Sleep -Seconds 1
 }
 
-if (-not $frontendReady) {
-    Write-Host "==================================================" -ForegroundColor Red
-    Write-Host "ERROR: Frontend dev server failed to respond within 20 seconds!" -ForegroundColor Red
-    Write-Host "==================================================" -ForegroundColor Red
-    if ($backendProc) { Stop-Process -Id $backendProc.Id -Force -ErrorAction SilentlyContinue }
-    if ($frontendProc) { Stop-Process -Id $frontendProc.Id -Force -ErrorAction SilentlyContinue }
-    & "$PSScriptRoot\kill_jarvis_processes.ps1"
-    exit 1
+function Ensure-FrontendDependencies {
+    param([string]$Root)
+    $frontendDir = Join-Path $Root "frontend"
+    $nodeModules = Join-Path $frontendDir "node_modules"
+
+    if (Test-Path $nodeModules) {
+        Write-Host "Frontend node_modules found." -ForegroundColor Green
+        return
+    }
+
+    Write-Host "Installing frontend dependencies..." -ForegroundColor Yellow
+    Push-Location $frontendDir
+    try {
+        npm.cmd install
+    }
+    finally {
+        Pop-Location
+    }
 }
 
-# Show running configuration
-Write-Host ""
-Write-Host "--------------------------------------------------" -ForegroundColor Cyan
-Write-Host "   JARVIS SERVERS ACTIVE" -ForegroundColor Green
-Write-Host "   Backend:  http://127.0.0.1:$env:JARVIS_BACKEND_PORT" -ForegroundColor Yellow
-Write-Host "   Frontend: http://127.0.0.1:5173" -ForegroundColor Yellow
-Write-Host "--------------------------------------------------" -ForegroundColor Cyan
-Write-Host ""
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$backendPort = 8000
+$frontendPort = 5173
+$backendProc = $null
+$frontendProc = $null
 
-# 12. Launch Electron dev mode in the foreground (blocking)
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host " JARVIS PC V2 - START_JARVIS runtime lock" -ForegroundColor Green
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "Project root: $root" -ForegroundColor Gray
+
+$env:JARVIS_PROJECT_ROOT = $root
+$env:JARVIS_BACKEND_HOST = "127.0.0.1"
+$env:JARVIS_BACKEND_PORT = [string]$backendPort
+$env:JARVIS_FRONTEND_URL = "http://127.0.0.1:$frontendPort"
+$env:JARVIS_FRONTEND_MODE = "dev"
+$env:JARVIS_LAUNCHER = "START_JARVIS"
+if ($env:JARVIS_LISTENER_ENABLED -ne "true") {
+    $env:JARVIS_LISTENER_ENABLED = "false"
+}
+$env:VITE_JARVIS_API_BASE = "http://127.0.0.1:$backendPort"
+
 try {
-    Write-Host "Launching Electron Dev Client..." -ForegroundColor Green
-    $oldDir = Get-Location
-    Set-Location "$root\frontend"
-    npm.cmd run electron
-    Set-Location $oldDir
-}
-catch {
-    Write-Host "An error occurred while running Electron: $_" -ForegroundColor Red
+    Write-Step "Stopping old JARVIS processes"
+    & "$PSScriptRoot\kill_jarvis_processes.ps1"
+
+    Clear-BackendPort -Port $backendPort
+
+    Write-Step "Checking backend environment"
+    Ensure-BackendEnv -Root $root
+
+    Write-Step "Checking backend dependencies"
+    Ensure-BackendDependencies -Root $root
+
+    Write-Step "Checking frontend dependencies"
+    Ensure-FrontendDependencies -Root $root
+
+    Write-Step "Starting backend"
+    $backendProc = Start-Process -FilePath "python" -ArgumentList "run_backend.py" -WorkingDirectory (Join-Path $root "backend") -PassThru -WindowStyle Hidden
+
+    if (-not (Wait-HttpOk -Url "http://127.0.0.1:$backendPort/health" -TimeoutSeconds 35 -Name "Backend")) {
+        throw "Backend did not become healthy on http://127.0.0.1:$backendPort/health."
+    }
+
+    Write-Step "Starting frontend dev server"
+    $frontendProc = Start-Process -FilePath "npm.cmd" -ArgumentList "run dev" -WorkingDirectory (Join-Path $root "frontend") -PassThru -WindowStyle Hidden
+
+    if (-not (Wait-HttpOk -Url "http://127.0.0.1:$frontendPort" -TimeoutSeconds 35 -Name "Frontend")) {
+        throw "Frontend did not become ready on http://127.0.0.1:$frontendPort."
+    }
+
+    Write-Host ""
+    Write-Host "Backend:  http://127.0.0.1:$backendPort" -ForegroundColor Green
+    Write-Host "Frontend: http://127.0.0.1:$frontendPort" -ForegroundColor Green
+    Write-Host "Launching Electron. Close Electron to stop backend/frontend." -ForegroundColor Green
+
+    Push-Location (Join-Path $root "frontend")
+    try {
+        npm.cmd run electron
+    }
+    finally {
+        Pop-Location
+    }
 }
 finally {
-    # 13. Clean up backend/frontend when Electron is closed
-    Write-Host "Electron closed. Terminating background servers..." -ForegroundColor Yellow
-    
-    if ($backendProc) {
-        Stop-Process -Id $backendProc.Id -Force -ErrorAction SilentlyContinue
-    }
-    if ($frontendProc) {
-        Stop-Process -Id $frontendProc.Id -Force -ErrorAction SilentlyContinue
-    }
-    
+    Write-Step "Stopping runtime processes"
+    Stop-ProcessTree -Process $frontendProc
+    Stop-ProcessTree -Process $backendProc
     & "$PSScriptRoot\kill_jarvis_processes.ps1"
-    Write-Host "Clean shutdown completed successfully." -ForegroundColor Green
+    Write-Host "JARVIS runtime stopped." -ForegroundColor Green
 }
