@@ -3,7 +3,7 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const BACKEND_PORT = process.env.JARVIS_BACKEND_PORT || "8000";
+const BACKEND_PORT = process.env.JARVIS_BACKEND_PORT || "18000";
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const isDev = Boolean(process.env.JARVIS_FRONTEND_URL) || Boolean(process.defaultApp);
 

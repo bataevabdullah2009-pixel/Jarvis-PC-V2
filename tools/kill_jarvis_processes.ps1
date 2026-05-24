@@ -34,9 +34,28 @@ function Get-ListeningPids {
     return $pids | Select-Object -Unique
 }
 
+function Test-JarvisProcess {
+    param([int]$ProcessId)
+
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        return $false
+    }
+
+    if ($process.ProcessName -match "^(python|pythonw|node|electron|JarvisBackend|JARVIS-PC-V2|JARVIS PC V2)$") {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+        $commandLine = [string]$cim.CommandLine
+        if ($commandLine -like "*$root*" -or $commandLine -like "*Jarvis PC V2*" -or $commandLine -like "*run_backend.py*") {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 Write-Host "Stopping JARVIS PC V2 processes..."
 
-$backendPort = 8000
+$backendPort = 18000
 if ($env:JARVIS_BACKEND_PORT) {
     $backendPort = [int]$env:JARVIS_BACKEND_PORT
 }
@@ -45,8 +64,13 @@ Write-Host "Checking for active listening processes on port $backendPort..."
 
 $listeningPids = @(Get-ListeningPids -Port $backendPort)
 foreach ($pidToKill in $listeningPids) {
-    Write-Host "Stopping process ID $pidToKill holding port $backendPort..."
-    Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+    if (Test-JarvisProcess -ProcessId $pidToKill) {
+        Write-Host "Stopping JARVIS process ID $pidToKill holding port $backendPort..."
+        Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+    }
+    else {
+        Write-Host "Port $backendPort is held by non-JARVIS or stale PID $pidToKill. Leaving it untouched."
+    }
 }
 
 Get-Process -Name "JarvisBackend" -ErrorAction SilentlyContinue | Stop-Process -Force

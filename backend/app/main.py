@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import os
@@ -99,7 +99,8 @@ def runtime_process_info() -> dict[str, Any]:
 
     return {
         "pid": os.getpid(),
-        "port": int(os.getenv("JARVIS_BACKEND_PORT", "8000")),
+        "host": os.getenv("JARVIS_BACKEND_HOST", "127.0.0.1"),
+        "port": int(os.getenv("JARVIS_BACKEND_PORT", "18000")),
         "cwd": os.getcwd(),
         "started_at": started_at_str,
         "mode": "dev",

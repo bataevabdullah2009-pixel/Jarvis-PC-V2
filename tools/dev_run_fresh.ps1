@@ -46,7 +46,7 @@ if (!(Get-Command node -ErrorAction SilentlyContinue)) {
 
 # 4. Set Dev Environment variables
 $env:JARVIS_FRONTEND_URL = "http://127.0.0.1:5173"
-$env:JARVIS_BACKEND_PORT = "8000"
+$env:JARVIS_BACKEND_PORT = "18000"
 $env:JARVIS_FRONTEND_MODE = "dev"
 $env:JARVIS_PROJECT_ROOT = $root
 
@@ -64,7 +64,7 @@ $backendReady = $false
 $maxRetries = 20
 for ($i = 1; $i -le $maxRetries; $i++) {
     try {
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -TimeoutSec 1 -ErrorAction Stop
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:18000/health" -TimeoutSec 1 -ErrorAction Stop
         # Support both raw response and envelope response
         if ($response.ok -eq $true -or $response.status -eq "ok" -or $response.data.status -eq "ok") {
             $backendReady = $true
@@ -82,7 +82,7 @@ for ($i = 1; $i -le $maxRetries; $i++) {
 if (-not $backendReady) {
     Write-Host "==================================================" -ForegroundColor Red
     Write-Host "ERROR: Backend failed to respond within 20 seconds!" -ForegroundColor Red
-    Write-Host "Check backend logs or open http://127.0.0.1:8000/debug/startup" -ForegroundColor Red
+    Write-Host "Check backend logs or open http://127.0.0.1:18000/debug/startup" -ForegroundColor Red
     Write-Host "==================================================" -ForegroundColor Red
     
     if ($backendProc) {
@@ -135,7 +135,7 @@ if (-not $frontendReady) {
 Write-Host ""
 Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 Write-Host "   JARVIS DEV SERVERS RUNNING" -ForegroundColor Green
-Write-Host "   Backend:  http://127.0.0.1:8000" -ForegroundColor Yellow
+Write-Host "   Backend:  http://127.0.0.1:18000" -ForegroundColor Yellow
 Write-Host "   Frontend: http://127.0.0.1:5173" -ForegroundColor Yellow
 Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 Write-Host ""

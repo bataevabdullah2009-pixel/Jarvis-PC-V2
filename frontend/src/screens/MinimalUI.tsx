@@ -1029,7 +1029,7 @@ function SettingsPanel({
           <InfoCard label="Режим Frontend" value={state.buildInfo?.frontend_mode ?? "unknown"} />
           <InfoCard label="Из исходников" value={state.buildInfo?.running_from_source ? "Да" : "Нет"} />
           <InfoCard label="Упакован (Packaged)" value={state.buildInfo?.packaged ? "Да" : "Нет"} />
-          <InfoCard label="API URL" value={import.meta.env.VITE_JARVIS_API_BASE ?? "http://127.0.0.1:8000"} />
+          <InfoCard label="Backend URL" value={import.meta.env.VITE_JARVIS_API_BASE ?? "http://127.0.0.1:18000"} />
         </div>
       </div>
       <ToggleRow label="Debug details" checked={Boolean(state.settings?.debug_mode)} onChange={(value) => onPatchSettings({ debug_mode: value })} />

@@ -53,18 +53,18 @@ class ReminderService:
         REMINDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     def start(self) -> None:
-        # On startup, mark all overdue reminders that are currently not fired
-        # as "missed" and "fired" so they don't play as a batch!
         try:
             reminders = self.load_reminders()
             now = time.time()
             changed = False
             for r in reminders:
                 if not r.get("fired", False) and r.get("due_timestamp", 0) <= now:
-                    r["fired"] = True
-                    r["missed"] = True
-                    changed = True
-                    logger.info("[REMINDER] Overdue reminder marked as missed on startup: id=%s text='%s'", r["id"], r["text"])
+                    due_t = r.get("due_timestamp", 0)
+                    if now - due_t > 300:
+                        r["fired"] = True
+                        r["missed"] = True
+                        changed = True
+                        logger.info("[REMINDER] Overdue reminder marked as missed on startup: id=%s text='%s'", r["id"], r["text"])
             if changed:
                 self.save_reminders(reminders)
         except Exception as e:

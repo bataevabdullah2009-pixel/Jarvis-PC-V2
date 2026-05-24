@@ -173,7 +173,12 @@ function Ensure-FrontendDependencies {
 }
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$backendPort = 8000
+if ($env:JARVIS_BACKEND_PORT) {
+    $backendPort = [int]$env:JARVIS_BACKEND_PORT
+}
+else {
+    $backendPort = 18000
+}
 $frontendPort = 5173
 $backendProc = $null
 $frontendProc = $null

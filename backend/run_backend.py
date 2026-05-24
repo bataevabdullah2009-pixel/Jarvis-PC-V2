@@ -7,7 +7,7 @@ import uvicorn
 
 def main() -> None:
     host = os.getenv("JARVIS_BACKEND_HOST", "127.0.0.1")
-    port = int(os.getenv("JARVIS_BACKEND_PORT", "8000"))
+    port = int(os.getenv("JARVIS_BACKEND_PORT", "18000"))
     uvicorn.run("app.main:app", host=host, port=port, log_level="info")
 
 

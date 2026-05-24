@@ -8,47 +8,88 @@
 START_JARVIS.bat
 ```
 
-`START_JARVIS.bat` вызывает `tools\start_jarvis.ps1`, который:
+Это единственный нормальный launcher для обычной работы.
+
+## Runtime Port
+
+JARVIS backend теперь использует постоянный порт:
+
+```text
+18000
+```
+
+Backend URL:
+
+```text
+http://127.0.0.1:18000
+```
+
+Frontend получает адрес backend через:
+
+```text
+VITE_JARVIS_API_BASE=http://127.0.0.1:18000
+```
+
+Если другой backend занимает порт `8000`, это больше не мешает JARVIS. Порт `8000` не является runtime-портом JARVIS.
+
+## Что Делает START_JARVIS
+
+`START_JARVIS.bat` вызывает `tools\start_jarvis.ps1`.
+
+Launcher:
 
 - определяет root проекта;
-- останавливает старые JARVIS процессы;
-- освобождает port 8000 только от `LISTENING` JARVIS PID;
+- задает `JARVIS_BACKEND_PORT=18000`, если переменная не задана;
+- задает `VITE_JARVIS_API_BASE` для frontend;
+- останавливает только старые JARVIS процессы;
+- освобождает только выбранный JARVIS port;
 - игнорирует `TIME_WAIT` и PID 0;
+- не убивает чужие процессы без ручного вмешательства;
 - проверяет `backend\.env`;
-- проверяет и устанавливает backend dependencies;
-- проверяет и устанавливает frontend dependencies;
-- запускает FastAPI backend и ждёт `/health`;
-- запускает Vite frontend и ждёт `http://127.0.0.1:5173`;
+- проверяет backend dependencies;
+- проверяет frontend dependencies;
+- запускает FastAPI backend;
+- ждет `/health`;
+- запускает Vite frontend dev server;
+- ждет `http://127.0.0.1:5173`;
 - запускает Electron;
 - при закрытии Electron останавливает backend и frontend.
 
-## Legacy launchers
+## Legacy Launchers
 
 Эти файлы оставлены только для совместимости:
 
 - `RUN_DEV_FRESH.bat` перенаправляет на `START_JARVIS.bat`.
-- `UPDATE_AND_LAUNCH_APP.bat` нужен только для update/package сценария.
+- `UPDATE_AND_LAUNCH_APP.bat` предназначен для update/build сценария.
 
-Для обычного запуска их не используйте.
+Для обычного запуска legacy launchers не используйте.
 
 ## Diagnostics
 
-Backend runtime diagnostics:
+Проверка backend:
 
 ```powershell
-curl.exe http://127.0.0.1:8000/debug/env-status
-curl.exe http://127.0.0.1:8000/debug/network-status
-curl.exe http://127.0.0.1:8000/debug/voice-provider-status
+curl.exe http://127.0.0.1:18000/health
+curl.exe http://127.0.0.1:18000/runtime/process-info
+curl.exe http://127.0.0.1:18000/debug/env-status
+curl.exe http://127.0.0.1:18000/debug/network-status
+curl.exe http://127.0.0.1:18000/debug/voice-provider-status
 ```
 
-OpenRouter проверяется отдельно от наличия ключа. Если ключ есть, но сеть/TLS падает, UI должен показывать network timeout, а не "OpenRouter API key отсутствует".
-
-Jarvis voice зафиксирован на Fish Audio для `Jarvis style`. Если Fish Audio недоступен, система переходит в `text_only`; Edge TTS и pyttsx3 не используются как чужой голос.
-
-## Runtime Smoke
+## Smoke Runtime
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\smoke_runtime.ps1
 ```
 
-Smoke падает при crash backend. OpenRouter network timeout считается warning, потому что внешний провайдер может быть временно недоступен, а локальные команды должны продолжать работать.
+Smoke проверяет backend startup, diagnostics endpoints, listener disabled state и assistant ask без зависимости от порта `8000`.
+
+## Source Format Guard
+
+Перед коммитом:
+
+```powershell
+python tools\check_source_format.py
+```
+
+Guard проверяет переносы строк, минимальное число строк у launcher-файлов, длинную первую строку и компиляцию Python-файлов.

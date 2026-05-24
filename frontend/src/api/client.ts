@@ -330,7 +330,7 @@ export type EventPayload = {
   payload: Record<string, unknown> | Array<Record<string, unknown>>;
 };
 
-const API_BASE = import.meta.env.VITE_JARVIS_API_BASE ?? "http://127.0.0.1:8000";
+export const API_BASE = import.meta.env.VITE_JARVIS_API_BASE || "http://127.0.0.1:18000";
 export const WS_EVENTS_URL = API_BASE.replace(/^http/, "ws") + "/ws/events";
 
 function friendlyFetchMessage(path: string, error: unknown): string {
