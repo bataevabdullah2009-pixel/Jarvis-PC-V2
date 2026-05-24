@@ -436,7 +436,9 @@ export function MinimalUI({
           </div>
           <div>
             <span>Backend</span>
-            <strong>{state.health?.backend ?? "checking"}</strong>
+            <strong style={{ color: Boolean(state.health) ? "#00FF66" : "#FF3333" }}>
+              {Boolean(state.health) ? (state.health?.backend ?? "ok") : "offline"}
+            </strong>
           </div>
           <div>
             <span>Статус</span>
@@ -467,18 +469,22 @@ function ControlPanel({
   selectedDevice: string;
   onDeviceChange: (id: string) => void;
 }) {
+  const isBackendAvailable = Boolean(state.health);
   const settings = state.settings;
   const runtimeMode = settings?.runtime_mode ?? (settings?.offline_mode ? "offline" : "hybrid");
 
   const listener = state.listenerStatus;
-  const isRunning = listener?.running;
-  const listenerState = listener?.state || "stopped";
+  const isRunning = isBackendAvailable ? Boolean(listener?.running) : false;
+  const listenerState = isBackendAvailable ? (listener?.state || "stopped") : "backend_unavailable";
   
   let listenerStatusLabel = "Live listener отключен";
   let statusColor = "rgba(255, 255, 255, 0.4)";
   let dotAnimation = false;
   
-  if (isRunning) {
+  if (listenerState === "backend_unavailable") {
+    listenerStatusLabel = "Backend не запущен. Запустите START_JARVIS.bat";
+    statusColor = "#FF3333";
+  } else if (isRunning) {
     if (listenerState === "listening_for_trigger" || listenerState === "idle") {
       listenerStatusLabel = "Слушаю 24/7";
       statusColor = "#00FF66";
@@ -502,7 +508,7 @@ function ControlPanel({
     statusColor = "#FF3333";
   }
   
-  if (state.voice?.stt?.configured === false) {
+  if (isBackendAvailable && state.voice?.stt?.configured === false) {
     listenerStatusLabel = "STT не настроен";
     statusColor = "#FF3333";
   }
@@ -910,14 +916,18 @@ function VoicesPanel({
           })}
         </select>
       </label>
-      <button className="wide-button" type="button" onClick={() => onTestMicrophone(selectedDevice)}>
-        <Mic size={17} />
-        Проверить микрофон
-      </button>
-      <button className="wide-button" type="button" onClick={onTestVoice}>
-        <Volume2 size={17} />
-        Проверить голос
-      </button>
+      {Boolean(state.health) && (
+        <>
+          <button className="wide-button" type="button" onClick={() => onTestMicrophone(selectedDevice)}>
+            <Mic size={17} />
+            Проверить микрофон
+          </button>
+          <button className="wide-button" type="button" onClick={onTestVoice}>
+            <Volume2 size={17} />
+            Проверить голос
+          </button>
+        </>
+      )}
     </section>
   );
 }

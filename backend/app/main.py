@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any
 
@@ -33,20 +34,62 @@ configure_logging()
 logger = get_logger(__name__)
 
 app = FastAPI(title="JARVIS PC V2 Backend", version="0.1.0")
+app.started_at = time.time()
 
-# Start background services
-reminder_service.start()
-settings_inst = get_settings()
-if settings_inst.listener_enabled:
+# Start background services safely via startup event
+@app.on_event("startup")
+async def startup_event() -> None:
+    # 1. Start reminder service safely
     try:
-        voice_listener.start(
-            device_id=settings_inst.listener_device_id,
-            wake_word_enabled=True,
-            clap_enabled=settings_inst.clap_enabled,
-            force_start=True
-        )
+        logger.info("Starting reminder service safely on app startup...")
+        # Clean up very old / overdue reminders on start
+        reminder_service.cleanup_old_reminders()
+        reminder_service.start()
     except Exception as e:
-        logger.error("Failed to autostart voice listener: %s", e)
+        logger.exception("Failed to start reminder_service on startup: %s", e)
+
+    # 2. Check if voice listener is enabled by env and safe Checks pass
+    listener_enabled_env = os.getenv("JARVIS_LISTENER_ENABLED", "false").lower() == "true"
+    if listener_enabled_env:
+        try:
+            logger.info("JARVIS_LISTENER_ENABLED is True. Verifying safety checks before starting voice listener...")
+            gate_res = voice_listener.check_safe_start()
+            if gate_res["safe_to_start"]:
+                voice_listener.start()
+                logger.info("Voice listener started safely on startup.")
+            else:
+                logger.warning(
+                    "Voice listener startup blocked by safe gate. Reason: %s. Fix: %s",
+                    gate_res["failed_check"],
+                    gate_res["fix"]
+                )
+        except Exception as e:
+            logger.exception("Failed to start voice_listener on startup: %s", e)
+    else:
+        logger.info("Voice listener auto-start is disabled (JARVIS_LISTENER_ENABLED=false).")
+
+@app.get("/runtime/process-info")
+def runtime_process_info() -> dict[str, Any]:
+    import os
+    import time
+    from datetime import datetime
+    
+    started_timestamp = getattr(app, "started_at", None)
+    if started_timestamp is None:
+        started_timestamp = time.time()
+        app.started_at = started_timestamp
+        
+    started_at_str = datetime.fromtimestamp(started_timestamp).isoformat()
+    
+    return {
+        "pid": os.getpid(),
+        "port": int(os.getenv("JARVIS_BACKEND_PORT", "8000")),
+        "cwd": os.getcwd(),
+        "started_at": started_at_str,
+        "mode": "dev",
+        "launcher": os.getenv("JARVIS_LAUNCHER", "START_JARVIS")
+    }
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "app://jarvis", "file://", "null"],
@@ -687,26 +730,57 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
         return envelope(fallback_data, ok=False, error=error_payload)
 
 
+def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -> dict[str, Any]:
+    status_dict = voice_listener.status()
+    settings = get_settings()
+    reason = status_dict["data"].get("reason")
+    if not settings.listener_enabled and not reason:
+        reason = "listener disabled by default"
+        status_dict["data"]["reason"] = reason
+        
+    return {
+        "ok": ok,
+        "data": status_dict["data"],
+        "error": error_dict
+    }
+
+
 @app.get("/voice/listener-status")
 def voice_listener_status() -> dict[str, Any]:
-    return voice_listener.status()
+    status_data = voice_listener.status()
+    return make_listener_response(status_data["ok"])
 
 
 @app.post("/voice/listener-start")
 def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
-    res = voice_listener.start(
+    gate_res = voice_listener.check_safe_start(request.device_id)
+    if not gate_res["safe_to_start"]:
+        error_payload = {
+            "code": "SAFE_GATE_BLOCKED",
+            "message": gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}",
+            "details": {
+                "failed_check": gate_res["failed_check"],
+                "fix": gate_res["fix"],
+                "checks": gate_res["checks"]
+            }
+        }
+        voice_listener.errors = [gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}"]
+        voice_listener.state = "stopped"
+        return make_listener_response(False, error_payload)
+        
+    result = voice_listener.start(
         device_id=request.device_id,
         wake_word_enabled=request.wake_word,
         clap_enabled=request.clap,
         force_start=True
     )
-    return res
+    return make_listener_response(result.get("ok", True))
 
 
 @app.post("/voice/listener-stop")
 def voice_listener_stop_post() -> dict[str, Any]:
-    res = voice_listener.stop()
-    return res
+    result = voice_listener.stop()
+    return make_listener_response(result.get("ok", True))
 
 
 @app.post("/voice/calibrate-mic")
@@ -782,6 +856,21 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
 
 @app.post("/voice/start-listener")
 def voice_start_listener(request: ListenerRequest) -> dict[str, Any]:
+    gate_res = voice_listener.check_safe_start(request.device_id)
+    if not gate_res["safe_to_start"]:
+        error_payload = {
+            "code": "SAFE_GATE_BLOCKED",
+            "message": gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}",
+            "details": {
+                "failed_check": gate_res["failed_check"],
+                "fix": gate_res["fix"],
+                "checks": gate_res["checks"]
+            }
+        }
+        voice_listener.errors = [gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}"]
+        voice_listener.state = "stopped"
+        return make_listener_response(False, error_payload)
+        
     result = voice_listener.start(
         device_id=request.device_id,
         wake_word_enabled=request.wake_word,
@@ -789,14 +878,14 @@ def voice_start_listener(request: ListenerRequest) -> dict[str, Any]:
         force_start=True
     )
     event_bus.emit("voice.listener.started", result.get("data", {}))
-    return envelope(result.get("data", {}))
+    return make_listener_response(result.get("ok", True))
 
 
 @app.post("/voice/stop-listener")
 def voice_stop_listener() -> dict[str, Any]:
     result = voice_listener.stop()
     event_bus.emit("voice.listener.stopped", result.get("data", {}))
-    return envelope(result.get("data", {}))
+    return make_listener_response(result.get("ok", True))
 
 
 @app.post("/assistant/ask")
@@ -1001,6 +1090,25 @@ def diagnostics_scenario_test(request: ScenarioTestRequest) -> dict[str, Any]:
         ok=False,
         error={"code": "UNKNOWN_SCENARIO", "message": "Сценарий не найден.", "details": {"scenario": request.scenario}},
     )
+
+
+@app.get("/reminders")
+def get_reminders_endpoint() -> dict[str, Any]:
+    return envelope(reminder_service.load_reminders())
+
+
+@app.post("/reminders/clear-fired")
+def clear_fired_reminders_endpoint() -> dict[str, Any]:
+    reminders = reminder_service.load_reminders()
+    unfired = [r for r in reminders if not r.get("fired", False)]
+    reminder_service.save_reminders(unfired)
+    return envelope({"status": "cleared_fired", "count": len(reminders) - len(unfired)})
+
+
+@app.post("/reminders/clear-all")
+def clear_all_reminders_endpoint() -> dict[str, Any]:
+    reminder_service.save_reminders([])
+    return envelope({"status": "cleared_all"})
 
 
 @app.websocket("/ws/events")

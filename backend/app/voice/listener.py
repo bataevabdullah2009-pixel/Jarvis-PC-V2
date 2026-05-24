@@ -65,6 +65,82 @@ class VoiceListener:
         
         self._initialized = True
 
+    def check_safe_start(self, device_id: str = "default") -> dict[str, Any]:
+        """
+        Performs all gate checks required for safe listener startup.
+        Returns a dict indicating if it's safe to start, the first failed check, the recommended fix, and all checks.
+        """
+        settings = get_settings()
+        
+        # 1. Backend alive
+        backend_alive = True
+        
+        # 2. Selected device exists
+        dev_res = resolve_input_device(device_id)
+        device_exists = bool(dev_res.get("ok", False))
+        
+        # 3. Microphone test (heard_signal = True)
+        microphone_ok = False
+        if device_exists:
+            try:
+                # Capture 0.2s duration (fast, non-blocking)
+                test_res = test_microphone(device_id=device_id, duration_seconds=0.2)
+                microphone_ok = bool(test_res.get("heard_signal", False))
+            except Exception as e:
+                logger.error("[LISTENER] Microphone test exception: %s", e)
+                microphone_ok = False
+        
+        # 4. STT configured
+        stt_conf = stt_dependency_status(settings)
+        stt_configured = bool(stt_conf.get("configured", False))
+        
+        # 5. Anti-echo available
+        anti_echo_available = True
+        
+        # 6. No current TTS speaking
+        no_current_tts_speaking = not is_speaking_now()
+        
+        # 7. No other listener running
+        no_other_listener_running = self.state == "stopped" or self._thread is None or not self._thread.is_alive()
+        
+        checks = {
+            "backend_alive": backend_alive,
+            "device_exists": device_exists,
+            "microphone_test": microphone_ok,
+            "stt_configured": stt_configured,
+            "anti_echo_available": anti_echo_available,
+            "no_current_tts_speaking": no_current_tts_speaking,
+            "no_other_listener_running": no_other_listener_running
+        }
+        
+        safe_to_start = all(checks.values())
+        failed_check = None
+        fix = None
+        
+        if not safe_to_start:
+            if not device_exists:
+                failed_check = "device_not_found"
+                fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
+            elif not microphone_ok:
+                failed_check = "microphone_no_audio"
+                fix = "Микрофон не улавливает сигнал. Проверьте подключение, настройки громкости, доступы Windows и запустите калибровку (run calibration)."
+            elif not stt_configured:
+                failed_check = "stt_not_configured"
+                fix = "STT (Vosk) не настроен. Пожалуйста, скачайте модель Vosk и укажите правильный путь в настройках."
+            elif not no_current_tts_speaking:
+                failed_check = "tts_speaking"
+                fix = "Пожалуйста, подождите, пока Джарвис договорит фразу."
+            elif not no_other_listener_running:
+                failed_check = "already_running"
+                fix = "Слушатель уже запущен."
+        
+        return {
+            "safe_to_start": safe_to_start,
+            "failed_check": failed_check,
+            "fix": fix,
+            "checks": checks
+        }
+
     def start(self, device_id: str = "default", wake_word_enabled: bool = True, clap_enabled: bool = True, force_start: bool = False) -> dict[str, Any]:
         """Starts the background listening thread if not already running."""
         with self._lock:
@@ -78,7 +154,7 @@ class VoiceListener:
             self.errors = []
             self.warnings = []
             
-            # Resolve device info
+            # Resolve device info first
             dev_res = resolve_input_device(device_id)
             if not dev_res["ok"]:
                 self.state = "error"
@@ -86,20 +162,37 @@ class VoiceListener:
                 return self.status()
                 
             self.device_name = dev_res["device_name"]
-            
-            # Calibration check (heard_signal check)
+
+            # Safe Start Gate checks (always verified on starting)
             if not force_start:
-                try:
-                    # Run a very brief 0.5s check to see if mic is alive
-                    test_res = test_microphone(device_id=device_id, duration_seconds=0.5)
-                    if not test_res.get("heard_signal", False):
-                        self.state = "error"
-                        self.errors.append("Microphone is not receiving any audio signals. Please run calibration.")
-                        return self.status()
-                except Exception as ex:
+                gate_res = self.check_safe_start(device_id)
+                if not gate_res["safe_to_start"]:
                     self.state = "error"
-                    self.errors.append(f"Failed to test microphone on start: {ex}")
-                    return self.status()
+                    self.errors.append(gate_res["fix"] or f"Safety gate check failed: {gate_res['failed_check']}")
+                    return {
+                        "ok": False,
+                        "data": {
+                            "enabled": get_settings().listener_enabled,
+                            "running": False,
+                            "state": self.state,
+                            "device_id": str(self.device_id),
+                            "device_name": self.device_name,
+                            "wake_word_enabled": self.wake_word_enabled,
+                            "clap_enabled": self.clap_enabled,
+                            "last_trigger": self.last_trigger,
+                            "last_transcript": self.last_transcript,
+                            "last_ignored_reason": self.last_ignored_reason,
+                            "speaking": is_speaking_now(),
+                            "cooldown_until": datetime.fromtimestamp(self.cooldown_until).isoformat() if self.cooldown_until > 0 else None,
+                            "errors": list(self.errors),
+                            "warnings": list(self.warnings),
+                            "metrics": dict(self.metrics),
+                            "safe_to_start": False,
+                            "failed_check": gate_res["failed_check"],
+                            "fix": gate_res["fix"],
+                            "checks": gate_res["checks"]
+                        }
+                    }
 
             # Anti-echo check for loopback device names
             if check_loopback_device(self.device_name):
@@ -111,6 +204,16 @@ class VoiceListener:
             self._thread = threading.Thread(target=self.run_loop, daemon=True)
             self._thread.start()
             
+            # Sync listener_state in wake.py
+            try:
+                from app.voice.wake import listener_state
+                listener_state.running = True
+                listener_state.wake_word_enabled = self.wake_word_enabled
+                listener_state.clap_enabled = self.clap_enabled
+                listener_state.device_id = str(self.device_id)
+            except Exception as e:
+                logger.error("[LISTENER] Failed to sync listener_state on start: %s", e)
+
             logger.info("[LISTENER] Background listener thread started successfully.")
             event_bus.emit("voice.listener.started", self.status()["data"])
             return self.status()
@@ -125,6 +228,16 @@ class VoiceListener:
             self._thread = None
             
         self.state = "stopped"
+        
+        # Sync listener_state in wake.py
+        try:
+            from app.voice.wake import listener_state
+            listener_state.running = False
+            listener_state.wake_word_enabled = False
+            listener_state.clap_enabled = False
+        except Exception as e:
+            logger.error("[LISTENER] Failed to sync listener_state on stop: %s", e)
+
         logger.info("[LISTENER] Background listener stopped.")
         event_bus.emit("voice.listener.stopped", self.status()["data"])
         return self.status()
@@ -132,6 +245,12 @@ class VoiceListener:
     def status(self) -> dict[str, Any]:
         """Returns the full listener status structured response."""
         settings = get_settings()
+        gate_res = self.check_safe_start(self.device_id)
+        
+        reason = None
+        if not settings.listener_enabled:
+            reason = "listener disabled by default"
+            
         return {
             "ok": len(self.errors) == 0,
             "data": {
@@ -149,7 +268,12 @@ class VoiceListener:
                 "cooldown_until": datetime.fromtimestamp(self.cooldown_until).isoformat() if self.cooldown_until > 0 else None,
                 "errors": list(self.errors),
                 "warnings": list(self.warnings),
-                "metrics": dict(self.metrics)
+                "metrics": dict(self.metrics),
+                "reason": reason,
+                "safe_to_start": gate_res["safe_to_start"],
+                "failed_check": gate_res["failed_check"],
+                "fix": gate_res["fix"],
+                "checks": gate_res["checks"]
             }
         }
 

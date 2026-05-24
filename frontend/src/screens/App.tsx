@@ -140,10 +140,10 @@ export function App() {
       api.buildInfo(),
       api.listenerStatus()
     ]);
-
+    const isBackendAlive = Boolean(health.ok);
     setState((current) => ({
       ...current,
-      health: health.ok ? health.data : current.health,
+      health: isBackendAlive ? health.data : null,
       appStatus: appStatus.ok ? appStatus.data : current.appStatus,
       license: license.ok ? license.data : current.license,
       voice: voice.ok ? voice.data : current.voice,
@@ -154,10 +154,10 @@ export function App() {
       commands: commands.ok ? commands.data?.commands ?? [] : current.commands,
       debugEnv: debugEnv.ok ? debugEnv.data : current.debugEnv,
       buildInfo: buildInfo.ok ? buildInfo.data : current.buildInfo,
-      listenerStatus: listenerStatus.ok ? listenerStatus.data : current.listenerStatus,
-      assistantStatus: health.ok ? current.assistantStatus : "error",
-      statusText: health.ok ? current.statusText : "Ошибка",
-      lastError: health.ok ? current.lastError : normalErrorMessage(health.error, "Backend недоступен")
+      listenerStatus: isBackendAlive && listenerStatus.ok ? listenerStatus.data : null,
+      assistantStatus: isBackendAlive ? current.assistantStatus : "error",
+      statusText: isBackendAlive ? current.statusText : "Ошибка",
+      lastError: isBackendAlive ? current.lastError : "Backend не запущен. Запустите START_JARVIS.bat"
     }));
   };
 

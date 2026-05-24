@@ -62,7 +62,19 @@ def test_record_command_with_text_override_routes_to_assistant() -> None:
     assert body["data"]["assistant_result"]["route_detail"] == "scenario:welcome_home"
 
 
-def test_listener_start_stop() -> None:
+def test_listener_start_stop(monkeypatch) -> None:
+    # Mock safe gate checks to pass
+    monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda dev_id: {
+        "ok": True, "device_name": "Test Mic", "sample_rate": 16000, "channels": 1
+    })
+    monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id, duration_seconds: {
+        "heard_signal": True, "rms": 0.1, "peak": 0.1
+    })
+    monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {
+        "configured": True, "provider": "vosk"
+    })
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
+    
     start = client.post(
         "/voice/start-listener",
         json={"wake_word": True, "clap": False, "device_id": "default"},

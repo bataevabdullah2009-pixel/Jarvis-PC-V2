@@ -47,11 +47,29 @@ class ReminderService:
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
+        self._last_tts_time = 0.0
         
         # Ensure persistence directory exists
         REMINDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     def start(self) -> None:
+        # On startup, mark all overdue reminders that are currently not fired
+        # as "missed" and "fired" so they don't play as a batch!
+        try:
+            reminders = self.load_reminders()
+            now = time.time()
+            changed = False
+            for r in reminders:
+                if not r.get("fired", False) and r.get("due_timestamp", 0) <= now:
+                    r["fired"] = True
+                    r["missed"] = True
+                    changed = True
+                    logger.info("[REMINDER] Overdue reminder marked as missed on startup: id=%s text='%s'", r["id"], r["text"])
+            if changed:
+                self.save_reminders(reminders)
+        except Exception as e:
+            logger.error("[REMINDER] Error resolving overdue reminders on startup: %s", e)
+
         with self._lock:
             if self._running:
                 return
@@ -59,6 +77,28 @@ class ReminderService:
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
             logger.info("[REMINDER] Reminder service scheduler started.")
+
+    def cleanup_old_reminders(self) -> None:
+        """Deletes reminders that are older than 30 days or fired long ago."""
+        reminders = self.load_reminders()
+        if not reminders:
+            return
+        now = time.time()
+        
+        # Keep unfired reminders, and reminders fired within the last 24 hours
+        new_list = []
+        for r in reminders:
+            due = r.get("due_timestamp", 0)
+            fired = r.get("fired", False)
+            if not fired:
+                new_list.append(r)
+            else:
+                # Fired reminder. Keep only if due within the last 24 hours
+                if now - due < 24 * 3600:
+                    new_list.append(r)
+        
+        self.save_reminders(new_list)
+        logger.info("[REMINDER] Cleaned up old reminders. Kept %d reminders.", len(new_list))
 
     def stop(self) -> None:
         with self._lock:
@@ -175,18 +215,33 @@ class ReminderService:
                         event_bus.emit("assistant.reminder.due", r)
                         
                         # 2. Speak it asynchronously using TTSService
-                        from app.voice.tts import TTSService
                         tts_text = f"Сэр, напоминаю: {r['text']}"
                         
                         # Use a background thread for speech so we don't block the scheduler
-                        def run_speech():
+                        # Spacing out speech triggers to be at least 10s apart.
+                        def run_speech(text_to_speak: str):
                             try:
+                                # Safe spacing logic
+                                with self._lock:
+                                    now_t = time.time()
+                                    time_since_last = now_t - getattr(self, "_last_tts_time", 0.0)
+                                    if time_since_last < 10.0:
+                                        sleep_needed = 10.0 - time_since_last
+                                        self._last_tts_time = now_t + sleep_needed
+                                    else:
+                                        sleep_needed = 0.0
+                                        self._last_tts_time = now_t
+                                
+                                if sleep_needed > 0.0:
+                                    time.sleep(sleep_needed)
+                                    
+                                from app.voice.tts import TTSService
                                 tts = TTSService(get_settings())
-                                tts.speak(tts_text, blocking=True)
+                                tts.speak(text_to_speak, blocking=True)
                             except Exception as ex:
                                 logger.error("[REMINDER] Failed to announce reminder: %s", ex)
                         
-                        threading.Thread(target=run_speech, daemon=True).start()
+                        threading.Thread(target=run_speech, args=(tts_text,), daemon=True).start()
 
                 if changed:
                     self.save_reminders(reminders)

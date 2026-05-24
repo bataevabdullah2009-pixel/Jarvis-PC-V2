@@ -293,7 +293,7 @@ class Settings:
     tts_pyttsx3_voice_id: str | None = None
     tts_pyttsx3_rate: int = 175
     tts_pyttsx3_volume: float = 0.8
-    listener_enabled: bool = True
+    listener_enabled: bool = False
     wake_words: str = "джарвис,чарли,jarvis"
     listener_device_id: str = "default"
     command_record_seconds: int = 6
@@ -389,7 +389,7 @@ class Settings:
         settings.license_enabled = os.getenv("LICENSE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         settings.allowed_folders = [settings.workspace_project_path]
         
-        settings.listener_enabled = env_bool("JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=True)
+        settings.listener_enabled = env_bool("JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=False)
         settings.wake_words = env_value("JARVIS_WAKE_WORDS", "WAKE_WORDS", default="джарвис,чарли,jarvis") or "джарвис,чарли,jarvis"
         settings.listener_device_id = env_value("JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
         try:
