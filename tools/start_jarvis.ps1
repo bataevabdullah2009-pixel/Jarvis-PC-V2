@@ -61,13 +61,18 @@ if ($netstatOut) {
     # Check again
     $netstatCheck = netstat -ano | findstr :8000
     if ($netstatCheck) {
-        Write-Error "Failed to release port 8000! Process might still be active."
-        exit 1
+        Write-Host "WARNING: Port 8000 is still occupied (possibly by a Windows kernel ghost socket leak)." -ForegroundColor Red
+        Write-Host "Automatically falling back to Port 8001 for this session!" -ForegroundColor Yellow
+        $env:JARVIS_BACKEND_PORT = "8001"
+    } else {
+        Write-Host "Port 8000 is now successfully free!" -ForegroundColor Green
     }
-    Write-Host "Port 8000 is now successfully free!" -ForegroundColor Green
 } else {
     Write-Host "Port 8000 is free." -ForegroundColor Green
 }
+
+# Set Vite backend base URL dynamically
+$env:VITE_JARVIS_API_BASE = "http://127.0.0.1:$env:JARVIS_BACKEND_PORT"
 
 # 4. Perform Git Pull
 Write-Host "Pulling latest changes from git repository..." -ForegroundColor Yellow
@@ -124,7 +129,7 @@ $backendReady = $false
 $maxRetries = 20
 for ($i = 1; $i -le $maxRetries; $i++) {
     try {
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -TimeoutSec 1 -ErrorAction Stop
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$env:JARVIS_BACKEND_PORT/health" -TimeoutSec 1 -ErrorAction Stop
         if ($response.ok -eq $true -or $response.status -eq "ok" -or $response.data.status -eq "ok") {
             $backendReady = $true
             Write-Host "Backend is ready after $i seconds!" -ForegroundColor Green
@@ -184,7 +189,7 @@ if (-not $frontendReady) {
 Write-Host ""
 Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 Write-Host "   JARVIS SERVERS ACTIVE" -ForegroundColor Green
-Write-Host "   Backend:  http://127.0.0.1:8000" -ForegroundColor Yellow
+Write-Host "   Backend:  http://127.0.0.1:$env:JARVIS_BACKEND_PORT" -ForegroundColor Yellow
 Write-Host "   Frontend: http://127.0.0.1:5173" -ForegroundColor Yellow
 Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 Write-Host ""
