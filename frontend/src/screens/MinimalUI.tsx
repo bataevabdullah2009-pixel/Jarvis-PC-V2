@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { CSSProperties, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { AppState, Screen } from "./App";
-import { SettingsData } from "../api/client";
+import { SettingsData, api } from "../api/client";
 import {
   accentPresets,
   defaultLocalSettings,
@@ -365,9 +365,6 @@ export function MinimalUI({
                 <button type="submit" title="Отправить">
                   <Send size={18} />
                 </button>
-                <button type="button" onClick={() => onRecordVoice(selectedDevice)} title="Микрофон">
-                  <Mic size={18} />
-                </button>
               </form>
 
               <div className="quick-actions">
@@ -473,29 +470,96 @@ function ControlPanel({
   const settings = state.settings;
   const runtimeMode = settings?.runtime_mode ?? (settings?.offline_mode ? "offline" : "hybrid");
 
+  const listener = state.listenerStatus;
+  const isRunning = listener?.running;
+  const listenerState = listener?.state || "stopped";
+  
+  let listenerStatusLabel = "Live listener отключен";
+  let statusColor = "rgba(255, 255, 255, 0.4)";
+  let dotAnimation = false;
+  
+  if (isRunning) {
+    if (listenerState === "listening_for_trigger" || listenerState === "idle") {
+      listenerStatusLabel = "Слушаю 24/7";
+      statusColor = "#00FF66";
+      dotAnimation = true;
+    } else if (listenerState === "triggered") {
+      listenerStatusLabel = "Ожидаю wake word";
+      statusColor = "#FFE054";
+    } else if (listenerState === "recording_command") {
+      listenerStatusLabel = "Записываю команду";
+      statusColor = "#FF3366";
+      dotAnimation = true;
+    } else if (listenerState === "speaking") {
+      listenerStatusLabel = "Джарвис говорит — микрофон заблокирован";
+      statusColor = "#00B8FF";
+    } else if (listenerState === "cooldown") {
+      listenerStatusLabel = "Cooldown";
+      statusColor = "#FFE054";
+    }
+  } else if (listenerState === "error") {
+    listenerStatusLabel = "Ошибка listener";
+    statusColor = "#FF3333";
+  }
+  
+  if (state.voice?.stt?.configured === false) {
+    listenerStatusLabel = "STT не настроен";
+    statusColor = "#FF3333";
+  }
+
+  const handleToggleWakeWord = async (val: boolean) => {
+    await onPatchSettings({ voice_wake_enabled: val });
+    if (val || settings?.clap_enabled) {
+      await api.listenerStart(selectedDevice, val, Boolean(settings?.clap_enabled));
+    } else {
+      await api.listenerStop();
+    }
+    setTimeout(onRefresh, 300);
+  };
+  
+  const handleToggleClap = async (val: boolean) => {
+    await onPatchSettings({ clap_enabled: val });
+    if (settings?.voice_wake_enabled || val) {
+      await api.listenerStart(selectedDevice, Boolean(settings?.voice_wake_enabled), val);
+    } else {
+      await api.listenerStop();
+    }
+    setTimeout(onRefresh, 300);
+  };
+
   return (
     <section className="panel control-panel">
       <div className="panel-heading">
         <SlidersHorizontal size={18} />
         <h2>Панель управления</h2>
       </div>
-      <ToggleRow label="Голосовое пробуждение (Preview)" checked={Boolean(settings?.voice_wake_enabled)} onChange={(value) => onPatchSettings({ voice_wake_enabled: value })} />
-      <ToggleRow label="Хлопок (Preview)" checked={Boolean(settings?.clap_enabled)} onChange={(value) => onPatchSettings({ clap_enabled: value })} />
-      {(settings?.voice_wake_enabled || settings?.clap_enabled) && (
+
+      <div style={{
+        marginBottom: "16px",
+        padding: "10px 12px",
+        background: "rgba(0, 0, 0, 0.2)",
+        borderRadius: "8px",
+        border: "1px solid rgba(255, 255, 255, 0.05)",
+        display: "flex",
+        alignItems: "center",
+        gap: "10px"
+      }}>
         <div style={{
-          marginTop: "4px",
-          marginBottom: "12px",
-          padding: "6px 10px",
-          background: "rgba(255, 179, 0, 0.1)",
-          border: "1px solid rgba(255, 179, 0, 0.2)",
-          borderRadius: "6px",
-          fontSize: "0.8rem",
-          color: "#FFE054",
-          textAlign: "center"
-        }}>
-          ⚠️ Live listener ещё не активен (только one-shot)
+          width: "10px",
+          height: "10px",
+          borderRadius: "50%",
+          background: statusColor,
+          boxShadow: isRunning ? `0 0 10px ${statusColor}` : "none",
+          animation: dotAnimation ? "pulse 1.5s infinite" : "none"
+        }} />
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.4)" }}>Статус Live Listener</span>
+          <strong style={{ fontSize: "0.85rem", color: "#FFF" }}>{listenerStatusLabel}</strong>
         </div>
-      )}
+      </div>
+
+      <ToggleRow label="Голосовое пробуждение" checked={Boolean(settings?.voice_wake_enabled)} onChange={handleToggleWakeWord} />
+      <ToggleRow label="Хлопок" checked={Boolean(settings?.clap_enabled)} onChange={handleToggleClap} />
       <ToggleRow label="Автозапуск" checked={Boolean(settings?.autostart_enabled)} onChange={(value) => onPatchSettings({ autostart_enabled: value })} />
       <label className="field-row">
         <span>Микрофон</span>
@@ -993,7 +1057,7 @@ function DiagnosticsPanel({
         <button type="button" onClick={onTestFishAudio}>Проверить Fish Audio</button>
         <button type="button" onClick={onTestAiFallback}>Проверить полный pipeline</button>
         <button type="button" onClick={onDiagnostics}>Полная проверка</button>
-        <button type="button" onClick={onTestMicrophone}>Микрофон</button>
+        <button type="button" onClick={() => onTestMicrophone()}>Микрофон</button>
         <button type="button" onClick={openLogs}>Открыть папку логов</button>
       </div>
       <div className="checks-grid">

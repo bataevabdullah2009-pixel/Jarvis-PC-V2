@@ -293,6 +293,15 @@ class Settings:
     tts_pyttsx3_voice_id: str | None = None
     tts_pyttsx3_rate: int = 175
     tts_pyttsx3_volume: float = 0.8
+    listener_enabled: bool = True
+    wake_words: str = "джарвис,чарли,jarvis"
+    listener_device_id: str = "default"
+    command_record_seconds: int = 6
+    cooldown_ms: int = 2500
+    ignore_self_audio: bool = True
+    clap_threshold: float = 0.25
+    min_rms_threshold: float = 0.003
+    max_triggers_per_minute: int = 6
     openrouter_max_tokens: int = 180
     openrouter_temperature: float = 0.4
     openrouter_connect_timeout: int = 4
@@ -379,6 +388,31 @@ class Settings:
 
         settings.license_enabled = os.getenv("LICENSE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         settings.allowed_folders = [settings.workspace_project_path]
+        
+        settings.listener_enabled = env_bool("JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=True)
+        settings.wake_words = env_value("JARVIS_WAKE_WORDS", "WAKE_WORDS", default="джарвис,чарли,jarvis") or "джарвис,чарли,jarvis"
+        settings.listener_device_id = env_value("JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
+        try:
+            settings.command_record_seconds = int(env_value("JARVIS_COMMAND_RECORD_SECONDS", "COMMAND_RECORD_SECONDS", default="6") or "6")
+        except ValueError:
+            settings.command_record_seconds = 6
+        try:
+            settings.cooldown_ms = int(env_value("JARVIS_COOLDOWN_MS", "COOLDOWN_MS", default="2500") or "2500")
+        except ValueError:
+            settings.cooldown_ms = 2500
+        settings.ignore_self_audio = env_bool("JARVIS_IGNORE_SELF_AUDIO", "IGNORE_SELF_AUDIO", default=True)
+        try:
+            settings.clap_threshold = float(env_value("JARVIS_CLAP_THRESHOLD", "CLAP_THRESHOLD", default="0.25") or "0.25")
+        except ValueError:
+            settings.clap_threshold = 0.25
+        try:
+            settings.min_rms_threshold = float(env_value("JARVIS_MIN_RMS_THRESHOLD", "MIN_RMS_THRESHOLD", default="0.003") or "0.003")
+        except ValueError:
+            settings.min_rms_threshold = 0.003
+        try:
+            settings.max_triggers_per_minute = int(env_value("JARVIS_MAX_TRIGGERS_PER_MINUTE", "MAX_TRIGGERS_PER_MINUTE", default="6") or "6")
+        except ValueError:
+            settings.max_triggers_per_minute = 6
         return settings
 
     def sanitized(self) -> dict[str, Any]:
@@ -413,6 +447,15 @@ class Settings:
             "tts_fallback_enabled": self.tts_fallback_enabled,
             "tts_require_fish_audio": self.tts_require_fish_audio,
             "tts_timeout_seconds": self.tts_timeout_seconds,
+            "listener_enabled": self.listener_enabled,
+            "wake_words": self.wake_words,
+            "listener_device_id": self.listener_device_id,
+            "command_record_seconds": self.command_record_seconds,
+            "cooldown_ms": self.cooldown_ms,
+            "ignore_self_audio": self.ignore_self_audio,
+            "clap_threshold": self.clap_threshold,
+            "min_rms_threshold": self.min_rms_threshold,
+            "max_triggers_per_minute": self.max_triggers_per_minute,
         }
 
 

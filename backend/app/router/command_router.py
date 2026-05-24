@@ -18,6 +18,9 @@ from app.router.intent_detector import match_open_app, match_scenario, normalize
 from app.scenarios import music, news, welcome_home, workspace
 from app.storage.command_store import get_commands
 from app.voice.tts import TTSService
+from app.core.action_policy import ActionPolicy
+from app.core.pending_confirmation import pending_store
+from app.features.reminders import reminder_service
 
 
 logger = get_logger(__name__)
@@ -83,6 +86,129 @@ class CommandRouter:
                 intent_ms=intent_ms,
             )
 
+        # 1. Parse local reminders
+        if "напомни" in normalized or "таймер" in normalized:
+            try:
+                parsed_rem = reminder_service.parse_and_create(text)
+                if parsed_rem:
+                    resp_text = f"Готово, сэр. Напомню через {int(parsed_rem['due_timestamp'] - time.time()) // 60 or 1} минут."
+                    intent_ms = int((time.perf_counter() - intent_started) * 1000)
+                    self._local_matched = True
+                    return self._finalize(
+                        command_id=command_id,
+                        route="local_command",
+                        route_detail="local_command:reminder",
+                        provider="local",
+                        response_text=resp_text,
+                        actions=[parsed_rem],
+                        requires_confirmation=False,
+                        tts_dry_run=dry_run,
+                        started=started,
+                        router_ms=self._elapsed(started),
+                        intent_ms=intent_ms,
+                    )
+            except Exception as e:
+                logger.exception("Failed to parse reminder")
+
+        # 2. Check pending confirmation actions first
+        pending = pending_store.get_pending()
+        if pending:
+            if ActionPolicy.is_confirmation_intent(normalized):
+                action = pending["action"]
+                summary = pending["summary"]
+                pending_store.clear_pending()
+                
+                action_type = action.get("type", "")
+                target = action.get("target", "")
+                
+                executed_actions = []
+                response_text = f"Выполняю, сэр: {summary}."
+                
+                if action_type == "open_app":
+                    opened = open_app(target, self.settings, dry_run=dry_run)
+                    executed_actions.append(opened)
+                    if opened.get("status") in {"completed", "dry_run"}:
+                        response_text = f"Приложение {target} успешно открыто, сэр."
+                    else:
+                        response_text = f"Не удалось открыть приложение {target}, сэр. Ошибка: {opened.get('message', 'unknown')}"
+                elif action_type == "open_url":
+                    opened = open_url(target, dry_run=dry_run)
+                    executed_actions.append(opened)
+                    response_text = f"Открываю ссылку в браузере, сэр."
+                else:
+                    action_completed = {**action, "status": "dry_run" if dry_run else "completed"}
+                    executed_actions.append(action_completed)
+                    
+                intent_ms = int((time.perf_counter() - intent_started) * 1000)
+                self._local_matched = True
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail=f"confirmed:{action_type}",
+                    provider="local",
+                    response_text=response_text,
+                    actions=executed_actions,
+                    requires_confirmation=False,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=self._elapsed(started),
+                    intent_ms=intent_ms,
+                )
+            
+            elif ActionPolicy.is_cancellation_intent(normalized):
+                pending_store.clear_pending()
+                intent_ms = int((time.perf_counter() - intent_started) * 1000)
+                self._local_matched = True
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail="canceled:action",
+                    provider="local",
+                    response_text="Действие отменено, сэр.",
+                    actions=[],
+                    requires_confirmation=False,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=self._elapsed(started),
+                    intent_ms=intent_ms,
+                )
+
+        # 3. Check for out-of-turn or expired confirmations
+        if ActionPolicy.is_confirmation_intent(normalized):
+            if pending_store.is_expired():
+                pending_store.clear_pending()
+                intent_ms = int((time.perf_counter() - intent_started) * 1000)
+                self._local_matched = True
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail="validation:expired",
+                    provider="local",
+                    response_text="Сэр, подтверждение истекло. Повторите команду.",
+                    actions=[],
+                    requires_confirmation=False,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=self._elapsed(started),
+                    intent_ms=intent_ms,
+                )
+            else:
+                intent_ms = int((time.perf_counter() - intent_started) * 1000)
+                self._local_matched = True
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail="validation:no_pending",
+                    provider="local",
+                    response_text="Сэр, сейчас нет действия, ожидающего подтверждения.",
+                    actions=[],
+                    requires_confirmation=False,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=self._elapsed(started),
+                    intent_ms=intent_ms,
+                )
+
         scenario_match = match_scenario(normalized)
         if scenario_match:
             self._local_matched = True
@@ -118,6 +244,42 @@ class CommandRouter:
             self._local_matched = True
             intent_ms = int((time.perf_counter() - intent_started) * 1000)
             
+            action_type = str(local_command.get("action", "")).strip()
+            value = str(local_command.get("value", "")).strip()
+            action = {"type": action_type, "target": value}
+            
+            status, reason = ActionPolicy.classify_action(action)
+            if status == "FORBIDDEN":
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail=f"forbidden:{action_type}",
+                    provider="local",
+                    response_text=f"Сэр, это действие заблокировано: {reason}",
+                    actions=[],
+                    requires_confirmation=False,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=intent_ms,
+                    intent_ms=intent_ms,
+                )
+            elif status == "CONFIRM_REQUIRED":
+                summary = f"выполнить команду '{local_command.get('phrases', [normalized])[0]}'"
+                pending_store.set_pending(action, summary)
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail=f"pending:{action_type}",
+                    provider="local",
+                    response_text=f"Сэр, действие требует подтверждения: {summary}. Подтверждаете?",
+                    actions=[action],
+                    requires_confirmation=True,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=intent_ms,
+                    intent_ms=intent_ms,
+                )
+
             local_started = time.perf_counter()
             result = self._run_local_command(local_command, dry_run=dry_run)
             local_command_ms = int((time.perf_counter() - local_started) * 1000)
@@ -134,7 +296,7 @@ class CommandRouter:
                 provider="local",
                 response_text=result["response_text"],
                 actions=result.get("actions", []),
-                requires_confirmation=bool(result.get("requires_confirmation", False)),
+                requires_confirmation=False,
                 tts_dry_run=dry_run,
                 started=started,
                 router_ms=router_ms,
@@ -147,35 +309,45 @@ class CommandRouter:
             self._local_matched = True
             intent_ms = int((time.perf_counter() - intent_started) * 1000)
             action = {"type": "open_app", "target": app_name}
-            decision = self.safety.validate(action)
             
-            local_started = time.perf_counter()
-            router_ms = intent_ms
-            pipeline_logger.info("[PIPELINE] route=local_command")
-            pipeline_logger.info("[PIPELINE] is_local=true")
-            pipeline_logger.info("[PIPELINE] local_matched=true")
-            pipeline_logger.info("[OPENROUTER] called=false reason=open_app")
-            if decision.requires_confirmation or decision.forbidden:
-                local_command_ms = int((time.perf_counter() - local_started) * 1000)
+            status, reason = ActionPolicy.classify_action(action)
+            if status == "FORBIDDEN":
                 return self._finalize(
                     command_id=command_id,
                     route="local_command",
-                    route_detail="local_command:open_app",
+                    route_detail="forbidden:open_app",
                     provider="local",
-                    response_text=f"Сэр, действие требует подтверждения: открыть {app_name}.",
-                    actions=[{**action, "safety": decision.to_dict()}],
-                    requires_confirmation=decision.requires_confirmation,
-                    forbidden=decision.forbidden,
+                    response_text=f"Сэр, это действие заблокировано: {reason}",
+                    actions=[],
+                    requires_confirmation=False,
                     tts_dry_run=dry_run,
                     started=started,
-                    router_ms=router_ms,
+                    router_ms=intent_ms,
                     intent_ms=intent_ms,
-                    local_command_ms=local_command_ms,
+                )
+            elif status == "CONFIRM_REQUIRED":
+                summary = f"открыть приложение '{app_name}'"
+                pending_store.set_pending(action, summary)
+                return self._finalize(
+                    command_id=command_id,
+                    route="local_command",
+                    route_detail="pending:open_app",
+                    provider="local",
+                    response_text=f"Сэр, открытие этого приложения требует подтверждения. Подтверждаете?",
+                    actions=[action],
+                    requires_confirmation=True,
+                    tts_dry_run=dry_run,
+                    started=started,
+                    router_ms=intent_ms,
+                    intent_ms=intent_ms,
                 )
 
+            local_started = time.perf_counter()
             opened = open_app(app_name, self.settings, dry_run=dry_run)
             local_command_ms = int((time.perf_counter() - local_started) * 1000)
             status_text = "Открываю, сэр." if opened["status"] in {"completed", "dry_run"} else opened.get("message", "Не удалось открыть приложение.")
+            
+            router_ms = intent_ms
             return self._finalize(
                 command_id=command_id,
                 route="local_command",

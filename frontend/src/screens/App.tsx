@@ -54,6 +54,7 @@ export type AppState = {
   lastError: string | null;
   debugMode: boolean;
   buildInfo: BuildInfoData | null;
+  listenerStatus: any | null;
 };
 
 const DEFAULT_ASSISTANT_TEXT = "Команда выполнена.";
@@ -117,7 +118,8 @@ export function App() {
     history: [],
     lastError: null,
     debugMode: false,
-    buildInfo: null
+    buildInfo: null,
+    listenerStatus: null
   });
 
   const setScreen = (screen: Screen) => {
@@ -125,7 +127,7 @@ export function App() {
   };
 
   const refreshStatus = async () => {
-    const [health, appStatus, license, voice, ttsStatus, settings, devices, commands, debugEnv, buildInfo] = await Promise.all([
+    const [health, appStatus, license, voice, ttsStatus, settings, devices, commands, debugEnv, buildInfo, listenerStatus] = await Promise.all([
       api.fullHealth(),
       api.appStatus(),
       api.licenseStatus(),
@@ -135,7 +137,8 @@ export function App() {
       api.voiceDevices(),
       api.commands(),
       api.debugEnvStatus(),
-      api.buildInfo()
+      api.buildInfo(),
+      api.listenerStatus()
     ]);
 
     setState((current) => ({
@@ -151,6 +154,7 @@ export function App() {
       commands: commands.ok ? commands.data?.commands ?? [] : current.commands,
       debugEnv: debugEnv.ok ? debugEnv.data : current.debugEnv,
       buildInfo: buildInfo.ok ? buildInfo.data : current.buildInfo,
+      listenerStatus: listenerStatus.ok ? listenerStatus.data : current.listenerStatus,
       assistantStatus: health.ok ? current.assistantStatus : "error",
       statusText: health.ok ? current.statusText : "Ошибка",
       lastError: health.ok ? current.lastError : normalErrorMessage(health.error, "Backend недоступен")

@@ -25,12 +25,28 @@ from app.voice.microphone import VoiceDependencyError
 from app.voice.tts import TTSService
 from app.voice.voice_pipeline import VoicePipeline, voice_error_response
 from app.core.assistant_orchestrator import AssistantOrchestrator
+from app.features.reminders import reminder_service
+from app.voice.listener import voice_listener
 
 
 configure_logging()
 logger = get_logger(__name__)
 
 app = FastAPI(title="JARVIS PC V2 Backend", version="0.1.0")
+
+# Start background services
+reminder_service.start()
+settings_inst = get_settings()
+if settings_inst.listener_enabled:
+    try:
+        voice_listener.start(
+            device_id=settings_inst.listener_device_id,
+            wake_word_enabled=True,
+            clap_enabled=settings_inst.clap_enabled,
+            force_start=True
+        )
+    except Exception as e:
+        logger.error("Failed to autostart voice listener: %s", e)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "app://jarvis", "file://", "null"],
@@ -105,6 +121,18 @@ class ListenerRequest(BaseModel):
     wake_word: bool = True
     clap: bool = True
     device_id: str = "default"
+
+
+class CalibrateMicRequest(BaseModel):
+    device_id: str = "default"
+    silence_seconds: float = 2.0
+    speech_seconds: float = 3.0
+
+
+class ListenerStartRequest(BaseModel):
+    device_id: str = "default"
+    wake_word: bool = True
+    clap: bool = True
 
 
 class SayRequest(BaseModel):
@@ -659,22 +687,116 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
         return envelope(fallback_data, ok=False, error=error_payload)
 
 
+@app.get("/voice/listener-status")
+def voice_listener_status() -> dict[str, Any]:
+    return voice_listener.status()
+
+
+@app.post("/voice/listener-start")
+def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
+    res = voice_listener.start(
+        device_id=request.device_id,
+        wake_word_enabled=request.wake_word,
+        clap_enabled=request.clap,
+        force_start=True
+    )
+    return res
+
+
+@app.post("/voice/listener-stop")
+def voice_listener_stop_post() -> dict[str, Any]:
+    res = voice_listener.stop()
+    return res
+
+
+@app.post("/voice/calibrate-mic")
+def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
+    from app.voice.microphone import capture_audio, resolve_input_device
+    
+    dev_res = resolve_input_device(request.device_id)
+    device_name = dev_res.get("device_name", "Unknown Device")
+    
+    if not dev_res["ok"]:
+        return {
+            "ok": False,
+            "device_id": str(request.device_id),
+            "device_name": device_name,
+            "noise_floor_rms": 0.0,
+            "speech_rms": 0.0,
+            "speech_peak": 0.0,
+            "heard_signal": False,
+            "recommended_min_rms_threshold": 0.003,
+            "fixes": [dev_res.get("fix", "Selected device not found.")]
+        }
+
+    try:
+        silence_capture = capture_audio(
+            device_id=request.device_id,
+            duration_seconds=request.silence_seconds,
+            sample_rate=16000,
+            channels=1
+        )
+        noise_floor_rms = silence_capture.rms
+        
+        speech_capture = capture_audio(
+            device_id=request.device_id,
+            duration_seconds=request.speech_seconds,
+            sample_rate=16000,
+            channels=1
+        )
+        speech_rms = speech_capture.rms
+        speech_peak = speech_capture.peak
+        
+        heard_signal = speech_rms > 0.005 or speech_peak > 0.02
+        recommended = max(0.003, noise_floor_rms * 1.5)
+        
+        fixes = []
+        if not heard_signal:
+            fixes.append("Увеличьте чувствительность микрофона в настройках Windows или выберите другое устройство.")
+
+        res = {
+            "ok": True,
+            "device_id": str(request.device_id),
+            "device_name": device_name,
+            "noise_floor_rms": noise_floor_rms,
+            "speech_rms": speech_rms,
+            "speech_peak": speech_peak,
+            "heard_signal": heard_signal,
+            "recommended_min_rms_threshold": recommended,
+            "fixes": fixes
+        }
+        return res
+    except Exception as exc:
+        return {
+            "ok": False,
+            "device_id": str(request.device_id),
+            "device_name": device_name,
+            "noise_floor_rms": 0.0,
+            "speech_rms": 0.0,
+            "speech_peak": 0.0,
+            "heard_signal": False,
+            "recommended_min_rms_threshold": 0.003,
+            "fixes": [f"Ошибка калибровки: {exc}"]
+        }
+
+
 @app.post("/voice/start-listener")
 def voice_start_listener(request: ListenerRequest) -> dict[str, Any]:
-    result = VoicePipeline(get_settings()).start_listener(
-        wake_word=request.wake_word,
-        clap=request.clap,
+    result = voice_listener.start(
         device_id=request.device_id,
+        wake_word_enabled=request.wake_word,
+        clap_enabled=request.clap,
+        force_start=True
     )
-    event_bus.emit("voice.listener.started", result)
-    return envelope(result)
+    event_bus.emit("voice.listener.started", result.get("data", {}))
+    return envelope(result.get("data", {}))
 
 
 @app.post("/voice/stop-listener")
 def voice_stop_listener() -> dict[str, Any]:
-    result = VoicePipeline(get_settings()).stop_listener()
-    event_bus.emit("voice.listener.stopped", result)
-    return envelope(result)
+    result = voice_listener.stop()
+    event_bus.emit("voice.listener.stopped", result.get("data", {}))
+    return envelope(result.get("data", {}))
 
 
 @app.post("/assistant/ask")

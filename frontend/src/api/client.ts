@@ -161,7 +161,7 @@ export type RecordCommandResponse = {
     fix: string | null;
   };
   assistant_result: CommandResult | null;
-  final_status: "recorded" | "no_audio" | "stt_not_configured" | "empty_transcript" | "sent_to_assistant";
+  final_status: "recorded" | "no_audio" | "stt_not_configured" | "empty_transcript" | "sent_to_assistant" | "record_error";
 };
 
 export type MicDiagnosticsData = {
@@ -457,6 +457,21 @@ export const api = {
       body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: durationSeconds ?? 3 })
     }),
   sttStatus: () => request<SttStatusData>("/voice/stt-status"),
+  listenerStatus: () => rawRequest<any>("/voice/listener-status"),
+  listenerStart: (deviceId: string, wakeWord: boolean, clap: boolean) =>
+    rawRequest<any>("/voice/listener-start", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, wake_word: wakeWord, clap })
+    }),
+  listenerStop: () =>
+    rawRequest<any>("/voice/listener-stop", {
+      method: "POST"
+    }),
+  calibrateMic: (deviceId: string, silenceSeconds = 2, speechSeconds = 3) =>
+    rawRequest<any>("/voice/calibrate-mic", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, silence_seconds: silenceSeconds, speech_seconds: speechSeconds })
+    }),
   sendCommand: (text: string) =>
     request<CommandResult>("/assistant/ask", {
       method: "POST",

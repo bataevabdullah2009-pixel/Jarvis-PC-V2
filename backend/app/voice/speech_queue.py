@@ -6,6 +6,7 @@ from typing import Any, NamedTuple
 
 from app.events.websocket_bus import event_bus
 from app.voice.speech_orchestrator import stop_all_audio
+from app.voice import anti_echo
 
 logger = logging.getLogger("jarvis.speech_queue")
 
@@ -91,6 +92,7 @@ class SpeechQueue:
 
         logger.info("[QUEUE] Starting TTS task command_id=%s", task.command_id)
         event_bus.emit("assistant.tts.started", {"command_id": task.command_id})
+        anti_echo.mark_tts_started(task.text)
 
         started = time.perf_counter()
         try:
@@ -101,11 +103,13 @@ class SpeechQueue:
             if self._cancel_event.is_set():
                 logger.info("[QUEUE] Task command_id=%s was cancelled/interrupted during playback", task.command_id)
                 event_bus.emit("assistant.tts.cancelled", {"command_id": task.command_id})
+                anti_echo.mark_tts_failed(task.text, "cancelled")
                 return
 
             latency_ms = result.get("latency_ms") or int((time.perf_counter() - started) * 1000)
             if result.get("ok"):
                 logger.info("[QUEUE] TTS task command_id=%s completed successfully in %sms", task.command_id, latency_ms)
+                anti_echo.mark_tts_completed(task.text)
                 event_bus.emit(
                     "assistant.tts.completed",
                     {
@@ -120,6 +124,7 @@ class SpeechQueue:
                 )
             else:
                 logger.warning("[QUEUE] TTS task command_id=%s failed: %s", task.command_id, result.get("error"))
+                anti_echo.mark_tts_failed(task.text, str(result.get("error", "TTS error")))
                 event_bus.emit(
                     "assistant.tts.failed",
                     {
@@ -135,6 +140,7 @@ class SpeechQueue:
         except Exception as e:
             logger.exception("[QUEUE] Exception processing task command_id=%s", task.command_id)
             latency_ms = int((time.perf_counter() - started) * 1000)
+            anti_echo.mark_tts_failed(task.text, str(e))
             event_bus.emit(
                 "assistant.tts.failed",
                 {
