@@ -203,6 +203,8 @@ def env_debug_status(settings: "Settings") -> dict[str, Any]:
 
     fa_voice = settings.fish_audio_voice_id
     fa_voice_preview = fa_voice[:8] + "..." if fa_voice else None
+    groq_key = settings.groq_api_key
+    groq_prefix = groq_key[:8] + "..." if groq_key else None
 
     checked = [str(path) for path in _dedupe_paths(ENV_PATHS_CHECKED)]
     loaded = [str(path) for path in _dedupe_paths(ENV_PATHS_LOADED)]
@@ -231,6 +233,17 @@ def env_debug_status(settings: "Settings") -> dict[str, Any]:
             "key_prefix": or_prefix,
             "model": settings.openrouter_model,
             "model_present": bool(settings.openrouter_model),
+        },
+        "groq": {
+            "key_present": bool(settings.groq_api_key),
+            "key_prefix": groq_prefix,
+            "model": settings.groq_model,
+            "model_present": bool(settings.groq_model),
+        },
+        "ai": {
+            "primary": settings.ai_primary,
+            "fallback": settings.ai_fallback,
+            "allow_local_fallback": settings.ai_allow_local_fallback,
         },
         "fish_audio": {
             "key_present": bool(settings.fish_audio_api_key),
@@ -276,10 +289,16 @@ class Settings:
     offline_mode: bool = False
     vosk_model_path: str = "backend\\models\\vosk-model-small-ru-0.22"
     stt_provider: str = "vosk"
+    ai_primary: str = "groq"
+    ai_fallback: str = "openrouter"
+    ai_allow_local_fallback: bool = True
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-4o-mini"
     groq_api_key: str | None = None
-    groq_model: str = "llama3-8b-8192"
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_timeout_seconds: int = 12
+    groq_max_tokens: int = 180
+    groq_temperature: float = 0.4
     fish_audio_api_key: str | None = None
     fish_audio_voice_id: str | None = None
     resemble_api_key: str | None = None
@@ -290,10 +309,19 @@ class Settings:
     tts_fallback: str = "pyttsx3"
     tts_require_fish_audio: bool = True
     tts_timeout_seconds: int = 25
+    voice_provider: str = "fish_audio"
+    local_tts_provider: str = "piper"
+    piper_enabled: bool = False
+    piper_model_path: str = "models/piper/ru_RU.onnx"
+    xtts_enabled: bool = False
+    xtts_model_path: str = "models/xtts"
+    gpt_sovits_enabled: bool = False
+    gpt_sovits_api_url: str = "http://127.0.0.1:9880"
     tts_pyttsx3_voice_id: str | None = None
     tts_pyttsx3_rate: int = 175
     tts_pyttsx3_volume: float = 0.8
-    listener_enabled: bool = False
+    listener_enabled: bool = True
+    listener_autostart: bool = True
     wake_words: str = "джарвис,чарли,jarvis"
     listener_device_id: str = "default"
     command_record_seconds: int = 6
@@ -334,16 +362,39 @@ class Settings:
         settings = cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
         settings.vosk_model_path = env_value("JARVIS_VOSK_MODEL_PATH", "VOSK_MODEL_PATH", default=settings.vosk_model_path) or settings.vosk_model_path
         settings.stt_provider = env_value("JARVIS_STT_PROVIDER", default=settings.stt_provider) or settings.stt_provider
+        settings.ai_primary = env_value("JARVIS_AI_PRIMARY", "AI_PRIMARY", default=settings.ai_primary) or settings.ai_primary
+        settings.ai_fallback = env_value("JARVIS_AI_FALLBACK", "AI_FALLBACK", default=settings.ai_fallback) or settings.ai_fallback
+        settings.ai_allow_local_fallback = env_bool("JARVIS_AI_ALLOW_LOCAL_FALLBACK", "AI_ALLOW_LOCAL_FALLBACK", default=settings.ai_allow_local_fallback)
         settings.openrouter_api_key = env_value("JARVIS_OPENROUTER_API_KEY", "OPENROUTER_API_KEY")
         settings.openrouter_model = env_value("JARVIS_OPENROUTER_MODEL", "OPENROUTER_MODEL", default=settings.openrouter_model) or settings.openrouter_model
         settings.groq_api_key = env_value("JARVIS_GROQ_API_KEY", "GROQ_API_KEY")
         settings.groq_model = env_value("JARVIS_GROQ_MODEL", "GROQ_MODEL", default=settings.groq_model) or settings.groq_model
+        try:
+            settings.groq_timeout_seconds = int(env_value("JARVIS_GROQ_TIMEOUT_SECONDS", "GROQ_TIMEOUT_SECONDS", default=str(settings.groq_timeout_seconds)) or settings.groq_timeout_seconds)
+        except ValueError:
+            settings.groq_timeout_seconds = 12
+        try:
+            settings.groq_max_tokens = int(env_value("JARVIS_GROQ_MAX_TOKENS", "GROQ_MAX_TOKENS", default=str(settings.groq_max_tokens)) or settings.groq_max_tokens)
+        except ValueError:
+            settings.groq_max_tokens = 180
+        try:
+            settings.groq_temperature = float(env_value("JARVIS_GROQ_TEMPERATURE", "GROQ_TEMPERATURE", default=str(settings.groq_temperature)) or settings.groq_temperature)
+        except ValueError:
+            settings.groq_temperature = 0.4
         settings.fish_audio_api_key = env_value("JARVIS_FISH_AUDIO_API_KEY", "FISH_AUDIO_API_KEY")
         settings.fish_audio_voice_id = env_value("JARVIS_FISH_AUDIO_VOICE_ID", "FISH_AUDIO_VOICE_ID")
         settings.resemble_api_key = env_value("JARVIS_RESEMBLE_API_KEY", "RESEMBLE_API_KEY")
         settings.resemble_project_id = env_value("JARVIS_RESEMBLE_PROJECT_ID", "RESEMBLE_PROJECT_ID")
         settings.resemble_voice_id = env_value("JARVIS_RESEMBLE_VOICE_ID", "RESEMBLE_VOICE_ID")
         settings.tts_primary = env_value("JARVIS_TTS_PRIMARY", "TTS_PRIMARY", default=settings.tts_primary) or settings.tts_primary
+        settings.voice_provider = env_value("JARVIS_VOICE_PROVIDER", default=settings.voice_provider) or settings.voice_provider
+        settings.local_tts_provider = env_value("JARVIS_LOCAL_TTS_PROVIDER", default=settings.local_tts_provider) or settings.local_tts_provider
+        settings.piper_enabled = env_bool("JARVIS_PIPER_ENABLED", default=settings.piper_enabled)
+        settings.piper_model_path = env_value("JARVIS_PIPER_MODEL_PATH", default=settings.piper_model_path) or settings.piper_model_path
+        settings.xtts_enabled = env_bool("JARVIS_XTTS_ENABLED", default=settings.xtts_enabled)
+        settings.xtts_model_path = env_value("JARVIS_XTTS_MODEL_PATH", default=settings.xtts_model_path) or settings.xtts_model_path
+        settings.gpt_sovits_enabled = env_bool("JARVIS_GPT_SOVITS_ENABLED", default=settings.gpt_sovits_enabled)
+        settings.gpt_sovits_api_url = env_value("JARVIS_GPT_SOVITS_API_URL", default=settings.gpt_sovits_api_url) or settings.gpt_sovits_api_url
         settings.tts_fallback = env_value("JARVIS_TTS_FALLBACK", "TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
         settings.tts_fallback_enabled = env_bool("JARVIS_TTS_FALLBACK_ENABLED", "TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
         settings.tts_require_fish_audio = env_bool("JARVIS_TTS_REQUIRE_FISH_AUDIO", "TTS_REQUIRE_FISH_AUDIO", "JARVIS_VOICE_LOCK", default=settings.tts_require_fish_audio)
@@ -393,7 +444,8 @@ class Settings:
         settings.license_enabled = os.getenv("LICENSE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         settings.allowed_folders = [settings.workspace_project_path]
         
-        settings.listener_enabled = env_bool("JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=False)
+        settings.listener_enabled = env_bool("JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=True)
+        settings.listener_autostart = env_bool("JARVIS_LISTENER_AUTOSTART", "LISTENER_AUTOSTART", default=True)
         settings.wake_words = env_value("JARVIS_WAKE_WORDS", "WAKE_WORDS", default="джарвис,чарли,jarvis") or "джарвис,чарли,jarvis"
         settings.listener_device_id = env_value("JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
         try:
@@ -439,8 +491,13 @@ class Settings:
             "offline_mode": self.offline_mode,
             "vosk_model_path": self.vosk_model_path,
             "stt_provider": self.stt_provider,
+            "ai_primary": self.ai_primary,
+            "ai_fallback": self.ai_fallback,
+            "ai_allow_local_fallback": self.ai_allow_local_fallback,
             "openrouter_configured": bool(self.openrouter_api_key),
             "groq_configured": bool(self.groq_api_key),
+            "groq_model": self.groq_model,
+            "openrouter_model": self.openrouter_model,
             "fish_audio_configured": bool(self.fish_audio_api_key),
             "fish_audio_voice_configured": bool(self.fish_audio_voice_id),
             "resemble_configured": bool(self.resemble_api_key),
@@ -451,7 +508,16 @@ class Settings:
             "tts_fallback_enabled": self.tts_fallback_enabled,
             "tts_require_fish_audio": self.tts_require_fish_audio,
             "tts_timeout_seconds": self.tts_timeout_seconds,
+            "voice_provider": self.voice_provider,
+            "local_tts_provider": self.local_tts_provider,
+            "piper_enabled": self.piper_enabled,
+            "piper_model_path": self.piper_model_path,
+            "xtts_enabled": self.xtts_enabled,
+            "xtts_model_path": self.xtts_model_path,
+            "gpt_sovits_enabled": self.gpt_sovits_enabled,
+            "gpt_sovits_api_url": self.gpt_sovits_api_url,
             "listener_enabled": self.listener_enabled,
+            "listener_autostart": self.listener_autostart,
             "wake_words": self.wake_words,
             "listener_device_id": self.listener_device_id,
             "command_record_seconds": self.command_record_seconds,
@@ -475,6 +541,9 @@ def patch_settings(patch: dict[str, Any]) -> Settings:
         "news_rss_url",
         "workspace_project_path",
         "open_terminal_with_workspace",
+        "ai_primary",
+        "ai_fallback",
+        "ai_allow_local_fallback",
         "voice_profile",
         "voice_wake_enabled",
         "clap_enabled",

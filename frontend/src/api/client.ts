@@ -212,8 +212,14 @@ export type SettingsData = {
   clap_enabled?: boolean;
   runtime_mode?: "online" | "offline" | "hybrid";
   autostart_enabled?: boolean;
+  ai_primary?: "groq" | "openrouter" | string;
+  ai_fallback?: "groq" | "openrouter" | string;
+  ai_allow_local_fallback?: boolean;
   voice_volume?: number;
   openrouter_configured: boolean;
+  groq_configured?: boolean;
+  groq_model?: string;
+  openrouter_model?: string;
   fish_audio_configured: boolean;
   fish_audio_voice_configured: boolean;
   tts_primary?: string;
@@ -293,6 +299,17 @@ export type DebugEnvStatus = {
     model: string;
     model_present?: boolean;
   };
+  groq?: {
+    key_present: boolean;
+    key_prefix?: string | null;
+    model: string;
+    model_present?: boolean;
+  };
+  ai?: {
+    primary: string;
+    fallback: string;
+    allow_local_fallback: boolean;
+  };
   fish_audio: {
     key_present: boolean;
     key_prefix?: string | null;
@@ -305,6 +322,22 @@ export type DebugEnvStatus = {
     fallback_enabled: boolean;
     require_fish_audio: boolean;
   };
+};
+
+export type VoiceProviderStatusData = {
+  env_loaded: boolean;
+  paths_loaded: string[];
+  voice_profile: string;
+  tts_primary: string;
+  require_fish_audio: boolean;
+  fallback_enabled: boolean;
+  fish_key_present: boolean;
+  fish_voice_id_present: boolean;
+  selected_provider: "fish_audio" | "text_only";
+  last_provider: string;
+  last_error_type: string | null;
+  last_error: string | null;
+  fixes: string[];
 };
 
 export type ProviderTestResult = {
@@ -321,6 +354,25 @@ export type ProviderTestResult = {
   error_type?: string;
   error_message?: string;
   fix?: string;
+};
+
+export type AIProviderStatusData = {
+  primary: string;
+  fallback: string;
+  groq: {
+    key_present: boolean;
+    model: string;
+    available: boolean;
+    last_error_type?: string | null;
+    latency_ms?: number | null;
+  };
+  openrouter: {
+    key_present: boolean;
+    model: string;
+    available: boolean;
+    last_error_type?: string | null;
+    latency_ms?: number | null;
+  };
 };
 
 export type EventPayload = {
@@ -424,10 +476,22 @@ export const api = {
       body: JSON.stringify({ text })
     }),
   debugEnvStatus: () => rawRequest<DebugEnvStatus>("/debug/env-status"),
+  aiProviderStatus: () => request<AIProviderStatusData>("/debug/ai-provider-status"),
+  voiceProviderStatus: () => request<VoiceProviderStatusData>("/debug/voice-provider-status"),
+  testJarvisVoice: (text = "Проверка голоса Джарвиса. Я на связи, сэр.") =>
+    request<ProviderTestResult>("/debug/test-jarvis-voice", {
+      method: "POST",
+      body: JSON.stringify({ text })
+    }),
   testOpenRouter: () =>
     rawRequest<ProviderTestResult>("/debug/test-openrouter", {
       method: "POST",
       body: JSON.stringify({})
+    }),
+  testGroq: () =>
+    rawRequest<ProviderTestResult>("/debug/test-groq", {
+      method: "POST",
+      body: JSON.stringify({ text: "Ответь одним словом: OK" })
     }),
   testFishAudio: () =>
     rawRequest<ProviderTestResult>("/debug/test-fish-audio", {

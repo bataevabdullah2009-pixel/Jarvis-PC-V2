@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.events.websocket_bus import event_bus
 
 logger = logging.getLogger("jarvis.anti_echo")
+SELF_ECHO_FIX = "Self-echo detected. Use headphones or lower speaker volume."
 
 # Module level state variables
 _speaking: bool = False
@@ -89,13 +90,23 @@ def should_ignore_transcript(transcript: str) -> dict[str, Any]:
     Returns a dict with key indicators.
     """
     global _consecutive_echo_count, _self_echo_loop_triggered
+
+    if not get_settings().ignore_self_audio:
+        return {
+            "ignore": False,
+            "reason": None,
+            "self_echo_blocked": False,
+            "stop_listener": False,
+            "fix": None,
+        }
     
     if not transcript:
         return {
             "ignore": True,
             "reason": "empty",
             "self_echo_blocked": False,
-            "stop_listener": False
+            "stop_listener": False,
+            "fix": None,
         }
 
     # 1. Check if speaking now (or in cooldown)
@@ -104,7 +115,8 @@ def should_ignore_transcript(transcript: str) -> dict[str, Any]:
             "ignore": True,
             "reason": "speaking_active",
             "self_echo_blocked": False,
-            "stop_listener": False
+            "stop_listener": False,
+            "fix": None,
         }
 
     # 2. Similarity comparison against last TTS output
@@ -131,13 +143,14 @@ def should_ignore_transcript(transcript: str) -> dict[str, Any]:
         if _consecutive_echo_count >= 3:
             _self_echo_loop_triggered = True
             stop_listener = True
-            logger.critical("[ANTI-ECHO] Self-echo loop detected 3 times consecutively! Signalling listener stop.")
+            logger.critical("[ANTI-ECHO] %s", SELF_ECHO_FIX)
 
         return {
             "ignore": True,
             "reason": f"similarity_echo (ratio: {sim_ratio:.2f})",
             "self_echo_blocked": True,
-            "stop_listener": stop_listener
+            "stop_listener": stop_listener,
+            "fix": SELF_ECHO_FIX if stop_listener else None,
         }
 
     # Reset counter on successful fresh command
@@ -146,7 +159,8 @@ def should_ignore_transcript(transcript: str) -> dict[str, Any]:
         "ignore": False,
         "reason": None,
         "self_echo_blocked": False,
-        "stop_listener": False
+        "stop_listener": False,
+        "fix": None,
     }
 
 

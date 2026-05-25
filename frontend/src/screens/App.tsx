@@ -6,6 +6,7 @@ import {
   CommandDefinition,
   CommandResult,
   DebugEnvStatus,
+  AIProviderStatusData,
   DiagnosticsData,
   FullHealthData,
   LicenseStatusData,
@@ -13,6 +14,7 @@ import {
   ProviderTestResult,
   SettingsData,
   TTSStatusData,
+  VoiceProviderStatusData,
   VoiceDependencyData,
   VoiceDevice
 } from "../api/client";
@@ -45,6 +47,8 @@ export type AppState = {
   commands: CommandDefinition[];
   diagnostics: DiagnosticsData | null;
   debugEnv: DebugEnvStatus | null;
+  aiProviderStatus: AIProviderStatusData | null;
+  voiceProviderStatus: VoiceProviderStatusData | null;
   openrouterTest: ProviderTestResult | null;
   fishAudioTest: ProviderTestResult | null;
   aiFallbackTest: CommandResult | null;
@@ -58,6 +62,14 @@ export type AppState = {
 };
 
 const DEFAULT_ASSISTANT_TEXT = "Команда выполнена.";
+
+function stripMojibake(text: string | null | undefined, fallback = ""): string {
+  if (!text) return fallback;
+  if (/[\u00d0\u00c2]|\u0420\u045f|\u0420\u0405|\u0420\u00a0|\u0432\u0459|\u043f\u0451/.test(text)) {
+    return fallback || "Backend вернул поврежденную строку кодировки.";
+  }
+  return text;
+}
 
 function normalErrorMessage(error: unknown, fallback = "Backend недоступен. Проверьте, запущен ли python run_backend.py. Откройте /debug/startup или /health."): string {
   const raw =
@@ -110,6 +122,8 @@ export function App() {
     commands: [],
     diagnostics: null,
     debugEnv: null,
+    aiProviderStatus: null,
+    voiceProviderStatus: null,
     openrouterTest: null,
     fishAudioTest: null,
     aiFallbackTest: null,
@@ -127,7 +141,7 @@ export function App() {
   };
 
   const refreshStatus = async () => {
-    const [health, appStatus, license, voice, ttsStatus, settings, devices, commands, debugEnv, buildInfo, listenerStatus] = await Promise.all([
+    const [health, appStatus, license, voice, ttsStatus, settings, devices, commands, debugEnv, aiProviderStatus, voiceProviderStatus, buildInfo, listenerStatus] = await Promise.all([
       api.fullHealth(),
       api.appStatus(),
       api.licenseStatus(),
@@ -137,6 +151,8 @@ export function App() {
       api.voiceDevices(),
       api.commands(),
       api.debugEnvStatus(),
+      api.aiProviderStatus(),
+      api.voiceProviderStatus(),
       api.buildInfo(),
       api.listenerStatus()
     ]);
@@ -153,6 +169,8 @@ export function App() {
       devices: devices.ok ? devices.data?.input_devices ?? [] : current.devices,
       commands: commands.ok ? commands.data?.commands ?? [] : current.commands,
       debugEnv: debugEnv.ok ? debugEnv.data : current.debugEnv,
+      aiProviderStatus: aiProviderStatus.ok ? aiProviderStatus.data : current.aiProviderStatus,
+      voiceProviderStatus: voiceProviderStatus.ok ? voiceProviderStatus.data : current.voiceProviderStatus,
       buildInfo: buildInfo.ok ? buildInfo.data : current.buildInfo,
       listenerStatus: isBackendAlive && listenerStatus.ok ? listenerStatus.data : null,
       assistantStatus: isBackendAlive ? current.assistantStatus : "error",
@@ -169,15 +187,23 @@ export function App() {
   }, []);
 
   const applyCommandResult = (userText: string, data: CommandResult) => {
-    const assistantText = resultText(data);
+    const assistantText = stripMojibake(resultText(data), DEFAULT_ASSISTANT_TEXT);
     const ttsProvider = data.tts?.provider ?? "none";
     const ttsOk = data.tts?.ok !== false;
     let ttsUnavailable: string | null = null;
     
-    if (!ttsOk || ttsProvider === "text_only") {
-      const ttsErr = data.tts?.error || "Неизвестная ошибка";
-      const ttsFix = data.tts?.fix || (data.tts?.details?.fix as string | undefined) || "Проверьте настройки в .env.";
-      ttsUnavailable = `Голос недоступен (Provider: ${ttsProvider}). Ошибка: ${ttsErr}. Решение: ${ttsFix}`;
+    if (ttsProvider === "none") {
+      ttsUnavailable = "Backend вернул некорректный TTS provider none";
+    } else if (!ttsOk || ttsProvider === "text_only") {
+      const ttsErr = stripMojibake(data.tts?.error, data.tts?.status || "unknown");
+      const ttsFix = stripMojibake(
+        data.tts?.fix || (data.tts?.details?.fix as string | undefined),
+        state.voiceProviderStatus?.fish_key_present && state.voiceProviderStatus?.fish_voice_id_present
+          ? "Проверьте доступность Fish Audio API и лимиты."
+          : "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env"
+      );
+      const errorType = data.tts?.status || (data.tts as any)?.error_type || state.voiceProviderStatus?.last_error_type || "unknown";
+      ttsUnavailable = `Голос недоступен (Provider: ${ttsProvider}). Тип: ${errorType}. Ошибка: ${ttsErr}. Решение: ${ttsFix}`;
     } else if (data.tts?.fallback_used) {
       const ttsFix = data.tts?.fix || "Проверьте ключи Fish Audio в .env.";
       ttsUnavailable = `Использован резервный голос (${ttsProvider}), основной недоступен. Решение: ${ttsFix}`;

@@ -52,7 +52,8 @@ try {
     Write-Step "Starting backend on port $Port"
     $env:JARVIS_PROJECT_ROOT = $ProjectRoot
     $env:JARVIS_BACKEND_PORT = [string]$Port
-    $env:JARVIS_LISTENER_ENABLED = "false"
+    $env:JARVIS_LISTENER_ENABLED = "true"
+    $env:JARVIS_LISTENER_AUTOSTART = "true"
     $BackendProcess = Start-Process -FilePath "python" -ArgumentList "run_backend.py" -WorkingDirectory $BackendDir -PassThru -WindowStyle Hidden
 
     $ready = $false
@@ -77,8 +78,10 @@ try {
     $health = Invoke-Json -Path "/health"
     $startup = Invoke-Json -Path "/debug/startup"
     $envStatus = Invoke-Json -Path "/debug/env-status"
+    $aiProvider = Invoke-Json -Path "/debug/ai-provider-status"
     $network = Invoke-Json -Path "/debug/network-status"
     $voiceProvider = Invoke-Json -Path "/debug/voice-provider-status"
+    $localVoice = Invoke-Json -Path "/debug/local-voice-status"
     $ttsStatus = Invoke-Json -Path "/voice/tts-status"
     $listenerStatus = Invoke-Json -Path "/voice/listener-status"
 
@@ -88,8 +91,18 @@ try {
     if ($startup.backend_started -ne $true) {
         throw "/debug/startup did not report backend_started=true."
     }
-    if ($listenerStatus.data.running -ne $false) {
-        throw "Listener should be disabled/stopped by default."
+    if ($listenerStatus.data.enabled -ne $true -or $listenerStatus.data.autostart -ne $true) {
+        throw "Listener should be enabled with autostart."
+    }
+    if ($aiProvider.data.primary -ne "groq") {
+        throw "AI primary should default to groq."
+    }
+    if ($localVoice.data.fish_audio.available -ne $true) {
+        $Warnings.Add("Fish Audio is not fully configured; local voice status reports unavailable.")
+    }
+    $validListenerState = @("listening_for_trigger", "blocked", "speaking", "cooldown") -contains $listenerStatus.data.state
+    if (-not $validListenerState) {
+        throw "Listener should be running or blocked with a precise reason."
     }
 
     if ($envStatus.openrouter.key_present -ne $true) {

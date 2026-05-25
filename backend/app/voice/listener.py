@@ -13,7 +13,8 @@ from app.voice.stt import STTService, stt_dependency_status
 from app.voice.anti_echo import (
     should_ignore_transcript,
     is_speaking_now,
-    check_loopback_device
+    check_loopback_device,
+    SELF_ECHO_FIX,
 )
 from app.core.assistant_orchestrator import AssistantOrchestrator
 
@@ -44,6 +45,9 @@ class VoiceListener:
         self.last_trigger = ""
         self.last_transcript = ""
         self.last_ignored_reason = ""
+        self.last_error_type: str | None = None
+        self.last_error: str | None = None
+        self.fix: str | None = None
         self.cooldown_until = 0.0
 
         self.errors: list[str] = []
@@ -62,6 +66,7 @@ class VoiceListener:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._trigger_timestamps: list[float] = []
+        self._assistant_lock = threading.Lock()
 
         self._initialized = True
 
@@ -122,19 +127,19 @@ class VoiceListener:
         if not safe_to_start:
             if not device_exists:
                 failed_check = "device_not_found"
-                fix = dev_res.get("fix") or f"Р’С‹Р±СЂР°РЅРЅРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ '{device_id}' РЅРµ РЅР°Р№РґРµРЅРѕ."
+                fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
             elif not microphone_ok:
                 failed_check = "microphone_no_audio"
-                fix = "РњРёРєСЂРѕС„РѕРЅ РЅРµ СѓР»Р°РІР»РёРІР°РµС‚ СЃРёРіРЅР°Р». РџСЂРѕРІРµСЂСЊС‚Рµ РїРѕРґРєР»СЋС‡РµРЅРёРµ, РЅР°СЃС‚СЂРѕР№РєРё РіСЂРѕРјРєРѕСЃС‚Рё, РґРѕСЃС‚СѓРїС‹ Windows Рё Р·Р°РїСѓСЃС‚РёС‚Рµ РєР°Р»РёР±СЂРѕРІРєСѓ (run calibration)."
+                fix = "Выберите другой микрофон или включите доступ Windows"
             elif not stt_configured:
                 failed_check = "stt_not_configured"
-                fix = "STT (Vosk) РЅРµ РЅР°СЃС‚СЂРѕРµРЅ. РџРѕР¶Р°Р»СѓР№СЃС‚Р°, СЃРєР°С‡Р°Р№С‚Рµ РјРѕРґРµР»СЊ Vosk Рё СѓРєР°Р¶РёС‚Рµ РїСЂР°РІРёР»СЊРЅС‹Р№ РїСѓС‚СЊ РІ РЅР°СЃС‚СЂРѕР№РєР°С…."
+                fix = "Укажите VOSK model path"
             elif not no_current_tts_speaking:
                 failed_check = "tts_speaking"
-                fix = "РџРѕР¶Р°Р»СѓР№СЃС‚Р°, РїРѕРґРѕР¶РґРёС‚Рµ, РїРѕРєР° Р”Р¶Р°СЂРІРёСЃ РґРѕРіРѕРІРѕСЂРёС‚ С„СЂР°Р·Сѓ."
+                fix = "Пожалуйста, подождите, пока Джарвис договорит фразу."
             elif not no_other_listener_running:
                 failed_check = "already_running"
-                fix = "РЎР»СѓС€Р°С‚РµР»СЊ СѓР¶Рµ Р·Р°РїСѓС‰РµРЅ."
+                fix = "Слушатель уже запущен."
 
         return {
             "safe_to_start": safe_to_start,
@@ -159,8 +164,7 @@ class VoiceListener:
             # Resolve device info first
             dev_res = resolve_input_device(device_id)
             if not dev_res["ok"]:
-                self.state = "error"
-                self.errors.append(dev_res["fix"] or "Selected input device not found.")
+                self.block("device_not_found", dev_res["fix"], dev_res["fix"] or "Selected input device not found.")
                 return self.status()
 
             self.device_name = dev_res["device_name"]
@@ -169,12 +173,16 @@ class VoiceListener:
             if not force_start:
                 gate_res = self.check_safe_start(device_id)
                 if not gate_res["safe_to_start"]:
-                    self.state = "error"
-                    self.errors.append(gate_res["fix"] or f"Safety gate check failed: {gate_res['failed_check']}")
+                    self.block(
+                        gate_res["failed_check"] or "listener_blocked",
+                        gate_res["fix"],
+                        gate_res["fix"] or f"Safety gate check failed: {gate_res['failed_check']}",
+                    )
                     return {
                         "ok": False,
                         "data": {
                             "enabled": get_settings().listener_enabled,
+                            "autostart": get_settings().listener_autostart,
                             "running": False,
                             "state": self.state,
                             "device_id": str(self.device_id),
@@ -191,6 +199,8 @@ class VoiceListener:
                             "metrics": dict(self.metrics),
                             "safe_to_start": False,
                             "failed_check": gate_res["failed_check"],
+                            "last_error_type": self.last_error_type,
+                            "last_error": self.last_error,
                             "fix": gate_res["fix"],
                             "checks": gate_res["checks"]
                         }
@@ -244,6 +254,20 @@ class VoiceListener:
         event_bus.emit("voice.listener.stopped", self.status()["data"])
         return self.status()
 
+    def block(self, reason: str, fix: str | None, error: str | None = None) -> dict[str, Any]:
+        """Marks the listener as blocked without failing the backend."""
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        self._thread = None
+        self.state = "blocked"
+        self.last_error_type = reason
+        self.last_error = error or reason
+        self.fix = fix
+        self.errors = [self.last_error]
+        event_bus.emit("voice.listener.blocked", self.status()["data"])
+        return self.status()
+
     def status(self) -> dict[str, Any]:
         """Returns the full listener status structured response."""
         settings = get_settings()
@@ -253,6 +277,7 @@ class VoiceListener:
                 "ok": True,
                 "data": {
                     "enabled": False,
+                    "autostart": settings.listener_autostart,
                     "running": False,
                     "state": "stopped",
                     "device_id": str(self.device_id),
@@ -267,6 +292,9 @@ class VoiceListener:
                     "metrics": dict(self.metrics),
                     "safe_to_start": False,
                     "reason": "listener disabled by default",
+                    "last_error_type": self.last_error_type,
+                    "last_error": self.last_error,
+                    "fix": self.fix,
                     "errors": [],
                     "warnings": []
                 }
@@ -279,9 +307,10 @@ class VoiceListener:
             reason = "listener disabled by default"
 
         return {
-            "ok": len(self.errors) == 0,
+            "ok": True,
             "data": {
                 "enabled": settings.listener_enabled,
+                "autostart": settings.listener_autostart,
                 "running": self.state != "stopped" and self._thread is not None and self._thread.is_alive(),
                 "state": self.state,
                 "device_id": str(self.device_id),
@@ -299,7 +328,9 @@ class VoiceListener:
                 "reason": reason,
                 "safe_to_start": gate_res["safe_to_start"],
                 "failed_check": gate_res["failed_check"],
-                "fix": gate_res["fix"],
+                "last_error_type": self.last_error_type or gate_res["failed_check"],
+                "last_error": self.last_error,
+                "fix": self.fix or gate_res["fix"],
                 "checks": gate_res["checks"]
             }
         }
@@ -324,8 +355,11 @@ class VoiceListener:
             # Ensure STT is configured
             stt_conf = stt_dependency_status(settings)
             if not stt_conf["configured"] and self.wake_word_enabled:
-                self.state = "error"
-                self.errors.append("STT is not configured but wake word is enabled. Add Vosk model.")
+                self.state = "blocked"
+                self.last_error_type = "stt_not_configured"
+                self.last_error = "STT is not configured but wake word is enabled. Add Vosk model."
+                self.fix = "Укажите VOSK model path"
+                self.errors.append(self.last_error)
                 event_bus.emit("voice.listener.state", {"state": self.state})
                 break
 
@@ -344,8 +378,11 @@ class VoiceListener:
             # Check if self-echo loop triggered in anti_echo
             from app.voice.anti_echo import _self_echo_loop_triggered
             if _self_echo_loop_triggered:
-                self.state = "error"
-                self.errors.append("Self-echo loop detected. Use headphones or lower speaker volume.")
+                self.state = "blocked"
+                self.last_error_type = "self_echo_detected"
+                self.last_error = SELF_ECHO_FIX
+                self.fix = SELF_ECHO_FIX
+                self.errors.append(SELF_ECHO_FIX)
                 event_bus.emit("voice.listener.state", {"state": self.state})
                 logger.error("[LISTENER] Self-echo loop detected. Stopping listener.")
                 break
@@ -497,10 +534,13 @@ class VoiceListener:
                 self.metrics["ignored_self_audio"] += 1
 
             if guard_res["stop_listener"]:
-                self.state = "error"
-                self.errors.append("Self-echo loop detected. Lower speaker volume or use headphones.")
+                self.state = "blocked"
+                self.last_error_type = "self_echo_detected"
+                self.last_error = guard_res.get("fix") or SELF_ECHO_FIX
+                self.fix = guard_res.get("fix") or SELF_ECHO_FIX
+                self.errors.append(self.last_error)
                 event_bus.emit("voice.listener.state", {"state": self.state})
-                self.stop()
+                self._stop_event.set()
             else:
                 self.enter_cooldown("ignored_echo")
             return
@@ -511,6 +551,11 @@ class VoiceListener:
         """Submits the transcribed text command to the assistant orchestrator."""
         self.state = "sending_to_assistant"
         event_bus.emit("voice.listener.state", {"state": self.state})
+
+        if not self._assistant_lock.acquire(blocking=False):
+            self.last_ignored_reason = "assistant_busy"
+            self.enter_cooldown("assistant_busy")
+            return
 
         settings = get_settings()
         orchestrator = AssistantOrchestrator(settings)
@@ -532,6 +577,8 @@ class VoiceListener:
                 loop.close()
         except Exception as e:
             logger.exception("[LISTENER] Error submitting command to assistant: %s", e)
+        finally:
+            self._assistant_lock.release()
 
         # Transition to speaking when TTS starts, and then cooldown.
         # But wait! mark_tts_started/mark_tts_completed inside tts playback already manages the speaking flag.

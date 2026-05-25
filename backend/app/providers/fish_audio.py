@@ -48,10 +48,20 @@ def _provider_log() -> logging.Logger:
 
 
 def _fix_for(status_code: int | None, error_type: str) -> str:
+    if error_type == "fish_key_missing":
+        return "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env"
+    if error_type == "fish_voice_id_missing":
+        return "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env"
+    if error_type == "fish_timeout":
+        return "Fish Audio timeout: проверьте сеть, proxy/VPN и доступ к api.fish.audio."
+    if error_type == "fish_api_error":
+        return "Fish Audio вернул ошибку. Проверьте ключ, voice_id, лимиты и logs/fish_audio.log."
     if error_type == "env_missing":
         return "Backend did not load .env or Fish Audio key/voice id is missing."
     if status_code == 401:
         return "Fish Audio 401: invalid or revoked API key."
+    if status_code == 402:
+        return "Fish Audio 402: пополните баланс или проверьте тариф/кредиты Fish Audio."
     if status_code == 403:
         return "Fish Audio 403: check API key permissions."
     if status_code == 404:
@@ -214,14 +224,16 @@ class FishAudioTTS:
                 last_error = exc
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 message = str(exc) or exc.__class__.__name__
-                self._log_failure(fish_logger, provider_logger, None, latency_ms, exc.__class__.__name__, message, retry_count)
+                error_type = "fish_timeout" if isinstance(exc, httpx.TimeoutException) else "fish_api_error"
+                self._log_failure(fish_logger, provider_logger, None, latency_ms, error_type, message, retry_count)
                 should_retry = isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError)) and latency_ms < 10_000 and attempt < MAX_RETRIES
                 if not should_retry:
                     break
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         exc = last_error or RuntimeError("unknown_fish_audio_error")
-        return self._failed_result(None, exc.__class__.__name__, str(exc) or exc.__class__.__name__, latency_ms, retry_count, safe_text)
+        error_type = "fish_timeout" if isinstance(exc, httpx.TimeoutException) else "fish_api_error"
+        return self._failed_result(None, error_type, str(exc) or exc.__class__.__name__, latency_ms, retry_count, safe_text)
 
     def speak(self, text: str, *, dry_run: bool = False) -> dict[str, Any]:
         safe_text = self._tts_text(text)

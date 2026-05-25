@@ -19,11 +19,14 @@ from app.pc.system import get_system_status
 from app.router.ai_planner import AIPlanner
 from app.router.command_router import CommandRouter
 from app.providers.fish_audio import FishAudioTTS
+from app.providers.groq import GroqPlanner
 from app.providers.openrouter import OpenRouterPlanner
 from app.scenarios import music, news, welcome_home, workspace
 from app.storage.command_store import get_commands
 from app.voice.microphone import VoiceDependencyError
 from app.voice.tts import TTSService
+from app.voice.speech_orchestrator import last_tts_state
+from app.voice.speech_queue import speech_queue
 from app.voice.voice_pipeline import VoicePipeline, voice_error_response
 from app.core.assistant_orchestrator import AssistantOrchestrator
 from app.features.reminders import reminder_service
@@ -48,16 +51,25 @@ async def lifespan(app: FastAPI):
     # Startup:
     safe_start_reminder_service()
 
-    # Check if voice listener is enabled by env and safe Checks pass
-    listener_enabled_env = os.getenv("JARVIS_LISTENER_ENABLED", "false").lower() == "true"
-    if listener_enabled_env:
+    settings = get_settings()
+    if settings.listener_enabled and settings.listener_autostart:
         try:
-            logger.info("JARVIS_LISTENER_ENABLED is True. Verifying safety checks before starting voice listener...")
-            gate_res = voice_listener.check_safe_start()
+            logger.info("Listener autostart enabled. Verifying safe-start gates before starting voice listener...")
+            gate_res = voice_listener.check_safe_start(settings.listener_device_id)
             if gate_res["safe_to_start"]:
-                voice_listener.start()
+                voice_listener.start(
+                    device_id=settings.listener_device_id,
+                    wake_word_enabled=True,
+                    clap_enabled=True,
+                    force_start=True,
+                )
                 logger.info("Voice listener started safely on startup.")
             else:
+                voice_listener.block(
+                    gate_res["failed_check"] or "listener_blocked",
+                    gate_res["fix"],
+                    gate_res["fix"] or gate_res["failed_check"],
+                )
                 logger.warning(
                     "Voice listener startup blocked by safe gate. Reason: %s. Fix: %s",
                     gate_res["failed_check"],
@@ -65,8 +77,9 @@ async def lifespan(app: FastAPI):
                 )
         except Exception as e:
             logger.exception("Failed to start voice_listener on startup: %s", e)
+            voice_listener.block("listener_autostart_error", "Проверьте микрофон, STT и зависимости voice runtime.", str(e))
     else:
-        logger.info("Voice listener auto-start is disabled (JARVIS_LISTENER_ENABLED=false).")
+        logger.info("Voice listener auto-start is disabled.")
 
     yield
 
@@ -144,6 +157,9 @@ class SettingsPatchRequest(BaseModel):
     news_url: str | None = None
     news_rss_url: str | None = None
     workspace_project_path: str | None = None
+    ai_primary: str | None = None
+    ai_fallback: str | None = None
+    ai_allow_local_fallback: bool | None = None
     voice_profile: str | None = None
     voice_wake_enabled: bool | None = None
     clap_enabled: bool | None = None
@@ -203,8 +219,12 @@ class ProviderTextRequest(BaseModel):
     text: str | None = None
 
 
+class JarvisVoiceTestRequest(BaseModel):
+    text: str = "Проверка голоса Джарвиса. Я на связи, сэр."
+
+
 class FullPipelineTestRequest(BaseModel):
-    text: str = "Р”Р¶Р°СЂРІРёСЃ РєР°Рє РґРµР»Р°?"
+    text: str = "Джарвис как дела?"
 
 
 def envelope(data: Any, *, ok: bool = True, error: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -226,7 +246,7 @@ def command_envelope(result: dict[str, Any]) -> dict[str, Any]:
         "route": result.get("route"),
         "provider": result.get("provider"),
         "action": result.get("action") or result.get("route"),
-        "text": result.get("text") or result.get("response_text") or "РљРѕРјР°РЅРґР° РІС‹РїРѕР»РЅРµРЅР°.",
+        "text": result.get("text") or result.get("response_text") or "Команда выполнена.",
         "openrouter_called": bool(result.get("openrouter_called", False)),
         "fish_audio_called": bool(result.get("fish_audio_called", False)),
         "local_matched": bool(result.get("local_matched", False)),
@@ -284,7 +304,7 @@ def license_status() -> dict[str, Any]:
             "enabled": False,
             "blocking": False,
             "status": "disabled",
-            "message": "Р›РёС†РµРЅР·РёСЏ РѕС‚РєР»СЋС‡РµРЅР° РґР»СЏ Р»РѕРєР°Р»СЊРЅРѕР№ PC-РІРµСЂСЃРёРё.",
+            "message": "Лицензия отключена для локальной PC-версии.",
         }
     )
 
@@ -296,7 +316,9 @@ def voice_dependency_check() -> dict[str, Any]:
 
 @app.get("/voice/tts-status")
 def voice_tts_status() -> dict[str, Any]:
-    return envelope(TTSService(get_settings()).status())
+    data = TTSService(get_settings()).status()
+    data.update(speech_queue.status())
+    return envelope(data)
 
 
 @app.get("/debug/voice-provider-status")
@@ -307,24 +329,51 @@ def debug_voice_provider_status() -> dict[str, Any]:
     fish_key_present = bool(settings.fish_audio_api_key)
     fish_voice_present = bool(settings.fish_audio_voice_id)
     selected_provider = "fish_audio" if fish_key_present and fish_voice_present else "text_only"
-    fallback_blocked_reason = None
-    if require_fish:
-        fallback_blocked_reason = "jarvis_voice_lock"
-    elif not settings.tts_fallback_enabled:
-        fallback_blocked_reason = "tts_fallback_disabled"
 
-    return {
-        "ok": True,
-        "env_loaded": bool(env_status.get("env_loaded")),
-        "tts_primary": settings.tts_primary,
-        "require_fish_audio": require_fish,
-        "fallback_enabled": bool(settings.tts_fallback_enabled and not require_fish),
-        "fish_key_present": fish_key_present,
-        "fish_voice_id_present": fish_voice_present,
-        "selected_provider": selected_provider,
-        "fallback_blocked_reason": fallback_blocked_reason,
-        "fix": None if selected_provider == "fish_audio" else "РџСЂРѕРІРµСЂСЊС‚Рµ backend/.env",
-    }
+    fixes: list[str] = []
+    if not fish_key_present or not fish_voice_present:
+        fixes.append("Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env")
+
+    last_state = last_tts_state()
+    return envelope(
+        {
+            "env_loaded": bool(env_status.get("env_loaded")),
+            "paths_loaded": env_status.get("paths_loaded") or env_status.get("env_paths_loaded") or [],
+            "voice_profile": settings.voice_profile,
+            "tts_primary": "fish_audio" if require_fish else settings.tts_primary,
+            "require_fish_audio": require_fish,
+            "fallback_enabled": bool(settings.tts_fallback_enabled and not require_fish),
+            "fish_key_present": fish_key_present,
+            "fish_voice_id_present": fish_voice_present,
+            "selected_provider": selected_provider,
+            "last_provider": last_state["last_provider"],
+            "last_error_type": last_state["last_error_type"],
+            "last_error": last_state["last_error"],
+            "fixes": fixes,
+        }
+    )
+
+
+@app.get("/debug/local-voice-status")
+def debug_local_voice_status() -> dict[str, Any]:
+    from app.voice.local_providers import GPTSoVITSLocalProvider, PiperLocalProvider, XTTSLocalProvider
+
+    settings = get_settings()
+    fish_key_present = bool(settings.fish_audio_api_key)
+    fish_voice_present = bool(settings.fish_audio_voice_id)
+    return envelope(
+        {
+            "fish_audio": {
+                "enabled": settings.tts_primary == "fish_audio" or settings.voice_provider == "fish_audio",
+                "key_present": fish_key_present,
+                "voice_id_present": fish_voice_present,
+                "available": fish_key_present and fish_voice_present,
+            },
+            "piper_local": PiperLocalProvider(settings).status().to_dict(),
+            "xtts_local": XTTSLocalProvider(settings).status().to_dict(),
+            "gpt_sovits_local": GPTSoVITSLocalProvider(settings).status().to_dict(),
+        }
+    )
 
 
 @app.get("/voice/offline-voices")
@@ -353,16 +402,19 @@ def voice_offline_voices() -> dict[str, Any]:
 
 @app.post("/voice/say")
 def voice_say(request: SayRequest) -> dict[str, Any]:
-    result = TTSService(get_settings()).speak(request.text)
+    result = TTSService(get_settings()).speak(request.text, blocking=True)
+    provider = result.get("provider") or "text_only"
+    if provider == "none":
+        provider = "text_only"
     summary = {
         "ok": bool(result.get("ok", False)),
-        "provider": result.get("provider", "text_only"),
+        "provider": provider,
         "spoken": bool(result.get("spoken", False)),
         "played": bool(result.get("played", False)),
         "fallback_used": bool(result.get("fallback_used", False)),
         "error": result.get("error"),
         "error_type": result.get("error_type"),
-        "fix": result.get("fix") or "РџСЂРѕРІРµСЂСЊС‚Рµ РЅР°СЃС‚СЂРѕР№РєРё РіРѕР»РѕСЃР° РІ .env.",
+        "fix": result.get("fix") or "Проверьте настройки голоса в .env.",
     }
     return {
         **summary,
@@ -523,9 +575,48 @@ def debug_env_status() -> dict[str, Any]:
 
 @app.post("/debug/test-openrouter")
 def debug_test_openrouter(request: ProviderTextRequest) -> dict[str, Any]:
-    text = request.text or "РЎРєР°Р¶Рё СЃС‚СЂРѕРіРѕ СЌС‚Сѓ С„СЂР°Р·Сѓ: Р“Р РћР—РќР«Р™-777"
-    required = "Р“Р РћР—РќР«Р™-777" if "Р“Р РћР—РќР«Р™-777" in text else None
+    text = request.text or "Скажи строго эту фразу: ГРОЗНЫЙ-777"
+    required = "ГРОЗНЫЙ-777" if "ГРОЗНЫЙ-777" in text else None
     return OpenRouterPlanner(get_settings()).test(text, must_contain=required)
+
+
+@app.get("/debug/ai-provider-status")
+def debug_ai_provider_status() -> dict[str, Any]:
+    settings = get_settings()
+
+    def openrouter_status() -> dict[str, Any]:
+        if not settings.openrouter_api_key:
+            return {
+                "key_present": False,
+                "model": settings.openrouter_model,
+                "available": False,
+                "last_error_type": "openrouter_key_missing",
+                "latency_ms": 0,
+            }
+        result = OpenRouterPlanner(settings).test("Ответь одним словом: OK", must_contain="OK")
+        return {
+            "key_present": True,
+            "model": settings.openrouter_model,
+            "available": bool(result.get("ok")),
+            "last_error_type": result.get("error_type"),
+            "latency_ms": result.get("latency_ms"),
+        }
+
+    return envelope(
+        {
+            "primary": settings.ai_primary,
+            "fallback": settings.ai_fallback,
+            "groq": GroqPlanner(settings).status_snapshot(),
+            "openrouter": openrouter_status(),
+        }
+    )
+
+
+@app.post("/debug/test-groq")
+def debug_test_groq(request: ProviderTextRequest) -> dict[str, Any]:
+    text = request.text or "Ответь одним словом: OK"
+    required = "OK" if "OK" in text else None
+    return GroqPlanner(get_settings()).test(text, must_contain=required)
 
 
 @app.post("/debug/test-ai-brain")
@@ -551,7 +642,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
     started_or = time.perf_counter()
     if settings.openrouter_api_key:
         try:
-            or_test = OpenRouterPlanner(settings).test("РЎРєР°Р¶Рё СЃС‚СЂРѕРіРѕ СЌС‚Сѓ С„СЂР°Р·Сѓ: Р“Р РћР—РќР«Р™-777", must_contain="Р“Р РћР—РќР«Р™-777")
+            or_test = OpenRouterPlanner(settings).test("Скажи строго эту фразу: ГРОЗНЫЙ-777", must_contain="ГРОЗНЫЙ-777")
             or_ok = bool(or_test.get("ok"))
             or_msg = "OpenRouter connection test passed." if or_ok else f"OpenRouter connection test failed: {or_test.get('error_message')}"
             if or_test.get("fix"):
@@ -560,7 +651,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
             or_test = {"ok": False, "error_message": str(e), "error_type": "exception"}
             or_ok = False
             or_msg = f"OpenRouter exception during test: {str(e)}"
-            fixes.append("РџСЂРѕРІРµСЂСЊС‚Рµ РёРЅС‚РµСЂРЅРµС‚-СЃРѕРµРґРёРЅРµРЅРёРµ РёР»Рё РЅР°СЃС‚СЂРѕР№РєРё РїСЂРѕРєСЃРё.")
+            fixes.append("Проверьте интернет-соединение или настройки прокси.")
     else:
         or_test = {"ok": False, "error_type": "key_missing", "error_message": "OpenRouter API key is missing."}
         or_ok = False
@@ -579,7 +670,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
     orchestrator = AssistantOrchestrator(settings)
     try:
         ask_res = await orchestrator.ask(
-            text="РљР°Рє С‚РµР±СЏ Р·РѕРІСѓС‚?",
+            text="Как тебя зовут?",
             speak=True,
             source="diagnostic",
             context={"dry_run": True}
@@ -606,7 +697,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
     started_tts = time.perf_counter()
     try:
         tts = TTSService(settings)
-        tts_res = tts.speak("РўРµСЃС‚.", dry_run=True)
+        tts_res = tts.speak("Тест.", dry_run=True)
         tts_ok = bool(tts_res.get("ok"))
         tts_msg = "TTS synthesis test passed." if tts_ok else f"TTS synthesis test failed: {tts_res.get('error')}"
         if tts_res.get("fix"):
@@ -648,7 +739,7 @@ async def debug_test_ai_brain() -> dict[str, Any]:
 def debug_test_fish_audio(request: ProviderTextRequest) -> dict[str, Any]:
     settings = get_settings()
     started = time.perf_counter()
-    text = request.text or "РџСЂРѕРІРµСЂРєР° РіРѕР»РѕСЃР° Р”Р¶Р°СЂРІРёСЃР°. РљРѕРґ СЃРµРјСЊ СЃРµРјСЊ СЃРµРјСЊ."
+    text = request.text or "Проверка голоса Джарвиса. Код семь семь семь."
     result = TTSService(settings).speak(text)
     latency_ms = result.get("latency_ms")
     if latency_ms is None:
@@ -680,6 +771,33 @@ def debug_test_fish_audio(request: ProviderTextRequest) -> dict[str, Any]:
         "played": bool(result.get("played")),
         "latency_ms": latency_ms,
     }
+
+
+@app.post("/debug/test-jarvis-voice")
+def debug_test_jarvis_voice(request: JarvisVoiceTestRequest) -> dict[str, Any]:
+    settings = get_settings()
+    text = request.text or "Проверка голоса Джарвиса. Я на связи, сэр."
+    result = TTSService(settings).speak(text, blocking=True)
+    provider = result.get("provider") or "text_only"
+    if provider == "none":
+        provider = "text_only"
+    job_status = "played" if result.get("played") else "failed"
+    data = {
+        "ok": bool(result.get("ok")),
+        "provider": provider,
+        "job_status": job_status,
+        "error_type": result.get("error_type"),
+        "error": result.get("error") or result.get("error_message"),
+        "fix": result.get("fix") or "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env",
+        "played": bool(result.get("played")),
+        "audio_bytes": result.get("audio_bytes") or 0,
+        "latency_ms": result.get("latency_ms") or 0,
+    }
+    return envelope(
+        data,
+        ok=bool(result.get("ok")),
+        error=None if result.get("ok") else {"code": "TTS_ERROR", "message": str(result.get("error")), "details": data},
+    )
 
 
 @app.post("/debug/test-full-pipeline")
@@ -741,7 +859,7 @@ def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
         error_type = None
         if not heard:
             error_type = "no_audio"
-            fix_msg = "РџСЂРѕРІРµСЂСЊС‚Рµ СЂР°Р·СЂРµС€РµРЅРёРµ Windows РґР»СЏ РјРёРєСЂРѕС„РѕРЅР°, СѓСЂРѕРІРµРЅСЊ РіСЂРѕРјРєРѕСЃС‚Рё Рё РІС‹Р±СЂР°РЅРЅРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ."
+            fix_msg = "Проверьте разрешение Windows для микрофона, уровень громкости и выбранное устройство."
 
         data = {
             "ok": heard,
@@ -761,7 +879,7 @@ def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
         if not heard:
             err_envelope = {
                 "code": "NO_AUDIO_HEARD",
-                "message": "РњРёРєСЂРѕС„РѕРЅ РЅРµ РїРѕР»СѓС‡Р°РµС‚ Р·РІСѓРє.",
+                "message": "Микрофон не получает звук.",
                 "error_type": "no_audio",
                 "fix": fix_msg
             }
@@ -770,9 +888,9 @@ def voice_test_capture(request: TestCaptureRequest) -> dict[str, Any]:
 
     except Exception as exc:
         error_code = getattr(exc, "code", "CAPTURE_FAILED")
-        fix_msg = "РџСЂРѕРІРµСЂСЊС‚Рµ СЂР°Р·СЂРµС€РµРЅРёРµ Windows РґР»СЏ РјРёРєСЂРѕС„РѕРЅР°, СѓСЂРѕРІРµРЅСЊ РіСЂРѕРјРєРѕСЃС‚Рё Рё РІС‹Р±СЂР°РЅРЅРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ."
+        fix_msg = "Проверьте разрешение Windows для микрофона, уровень громкости и выбранное устройство."
         if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
-            fix_msg = f"РЈСЃС‚Р°РЅРѕРІРёС‚Рµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё: {exc.details['install_hint']}"
+            fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
 
         data = {
             "ok": False,
@@ -835,7 +953,7 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
                 "code": "VOICE_RECORD_ERROR",
                 "message": result.get("stt", {}).get("fix") or "Voice recording failed",
                 "error_type": result.get("stt", {}).get("error_type") or "CAPTURE_FAILED",
-                "fix": result.get("stt", {}).get("fix") or "РџСЂРѕРІРµСЂСЊС‚Рµ РІС‹Р±СЂР°РЅРЅС‹Р№ РјРёРєСЂРѕС„РѕРЅ."
+                "fix": result.get("stt", {}).get("fix") or "Проверьте выбранный микрофон."
             }
             return envelope(result, ok=False, error=error_payload)
 
@@ -844,9 +962,9 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
         logger.exception("Exception inside voice_record_command endpoint")
         error_msg = str(exc)
         error_type = exc.__class__.__name__
-        fix_msg = "РџСЂРѕРІРµСЂСЊС‚Рµ РІС‹Р±СЂР°РЅРЅС‹Р№ РјРёРєСЂРѕС„РѕРЅ, РґРѕСЃС‚СѓРї Windows Рє РјРёРєСЂРѕС„РѕРЅСѓ, СѓСЂРѕРІРµРЅСЊ РіСЂРѕРјРєРѕСЃС‚Рё, СЂР°Р·СЂРµС€РµРЅРёРµ РґР»СЏ desktop apps."
+        fix_msg = "Проверьте выбранный микрофон, доступ Windows к микрофону, уровень громкости, разрешение для desktop apps."
         if isinstance(exc, VoiceDependencyError) and exc.details.get("install_hint"):
-            fix_msg = f"РЈСЃС‚Р°РЅРѕРІРёС‚Рµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё: {exc.details['install_hint']}"
+            fix_msg = f"Установите зависимости: {exc.details['install_hint']}"
 
         error_payload = {
             "code": "VOICE_RECORD_ERROR",
@@ -890,6 +1008,7 @@ def voice_listener_status() -> dict[str, Any]:
             "ok": True,
             "data": {
                 "enabled": False,
+                "autostart": settings.listener_autostart,
                 "running": False,
                 "state": "stopped",
                 "device_id": str(settings.listener_device_id),
@@ -904,6 +1023,9 @@ def voice_listener_status() -> dict[str, Any]:
                 "metrics": {},
                 "safe_to_start": False,
                 "reason": "listener disabled by default",
+                "last_error_type": None,
+                "last_error": None,
+                "fix": None,
                 "errors": [],
                 "warnings": []
             }
@@ -925,8 +1047,11 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
                 "checks": gate_res["checks"]
             }
         }
-        voice_listener.errors = [gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}"]
-        voice_listener.state = "stopped"
+        voice_listener.block(
+            gate_res["failed_check"] or "listener_blocked",
+            gate_res["fix"],
+            gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}",
+        )
         return make_listener_response(False, error_payload)
 
     result = voice_listener.start(
@@ -987,7 +1112,7 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
 
         fixes = []
         if not heard_signal:
-            fixes.append("РЈРІРµР»РёС‡СЊС‚Рµ С‡СѓРІСЃС‚РІРёС‚РµР»СЊРЅРѕСЃС‚СЊ РјРёРєСЂРѕС„РѕРЅР° РІ РЅР°СЃС‚СЂРѕР№РєР°С… Windows РёР»Рё РІС‹Р±РµСЂРёС‚Рµ РґСЂСѓРіРѕРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ.")
+            fixes.append("Увеличьте чувствительность микрофона в настройках Windows или выберите другое устройство.")
 
         res = {
             "ok": True,
@@ -1227,7 +1352,7 @@ def diagnostics_scenario_test(request: ScenarioTestRequest) -> dict[str, Any]:
     return envelope(
         None,
         ok=False,
-        error={"code": "UNKNOWN_SCENARIO", "message": "РЎС†РµРЅР°СЂРёР№ РЅРµ РЅР°Р№РґРµРЅ.", "details": {"scenario": request.scenario}},
+        error={"code": "UNKNOWN_SCENARIO", "message": "Сценарий не найден.", "details": {"scenario": request.scenario}},
     )
 
 

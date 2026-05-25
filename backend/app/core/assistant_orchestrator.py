@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 from typing import Any
@@ -10,6 +11,9 @@ import anyio
 from app.core.config import LOG_DIR, Settings
 from app.router.command_router import CommandRouter
 from app.voice.tts import TTSService
+
+
+_ASSISTANT_REQUEST_LOCK = threading.Lock()
 
 
 def _get_backend_logger() -> logging.Logger:
@@ -41,6 +45,19 @@ class AssistantOrchestrator:
         source: str = "hud",
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        await anyio.to_thread.run_sync(_ASSISTANT_REQUEST_LOCK.acquire)
+        try:
+            return await self._ask_locked(text=text, speak=speak, source=source, context=context)
+        finally:
+            _ASSISTANT_REQUEST_LOCK.release()
+
+    async def _ask_locked(
+        self,
+        text: str,
+        speak: bool = True,
+        source: str = "hud",
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
         context = context or {}
         context["dry_run"] = context.get("dry_run", False)
@@ -65,15 +82,16 @@ class AssistantOrchestrator:
                 "spoken": False,
                 "tts": {
                     "ok": False,
-                    "provider": "none",
+                    "provider": "text_only",
                     "spoken": False,
                     "played": False,
                     "error": "Empty input text",
+                    "error_type": "empty_input",
                     "status": "failed",
                     "latency_ms": 0,
                     "text": "Сэр, запрос пустой. Задайте вопрос или произнесите команду."
                 },
-                "provider": "none",
+                "provider": "text_only",
                 "model": "",
                 "local_matched": False,
                 "openrouter_called": False,
@@ -114,15 +132,16 @@ class AssistantOrchestrator:
                 "spoken": False,
                 "tts": {
                     "ok": False,
-                    "provider": "none",
+                    "provider": "text_only",
                     "spoken": False,
                     "played": False,
                     "error": str(e),
+                    "error_type": "router_crash",
                     "status": "failed",
                     "latency_ms": 0,
                     "text": f"Сэр, произошел системный сбой: {str(e)}"
                 },
-                "provider": "none",
+                "provider": "text_only",
                 "model": "",
                 "local_matched": False,
                 "openrouter_called": False,
@@ -147,7 +166,7 @@ class AssistantOrchestrator:
         local_matched = bool(router_result.get("local_matched", False))
 
         # 5. Check if it's a controlled fallback (missing OpenRouter key and not local matched)
-        has_openrouter_key = bool(self.settings.openrouter_api_key)
+        has_ai_key = bool(self.settings.groq_api_key or self.settings.openrouter_api_key)
         
         # Determine mode
         route = router_result.get("route")
@@ -155,14 +174,14 @@ class AssistantOrchestrator:
         
         plan_data = router_result.get("plan", {})
         plan_status = plan_data.get("status") if isinstance(plan_data, dict) else None
-        is_ai_error = (plan_status == "ai_error") or (router_result.get("route_detail") == "ai_fallback:unavailable" and has_openrouter_key)
+        is_ai_error = (plan_status == "ai_error") or (router_result.get("route_detail") == "ai_fallback:unavailable" and has_ai_key)
 
         # Explicitly check for controlled fallback when key is missing and no local match occurred
-        if not has_openrouter_key and not local_matched:
-            fallback_text = "Сэр, AI-мозг пока не подключён: отсутствует OpenRouter API key. Локальные команды работают."
+        if not has_ai_key and not local_matched:
+            fallback_text = "Сэр, облачный AI сейчас недоступен. Локальные команды доступны."
             router_result["text"] = fallback_text
             router_result["response_text"] = fallback_text
-            router_result["provider"] = "none"
+            router_result["provider"] = "text_only"
             router_result["route"] = "ai_fallback"
             router_result["route_detail"] = "ai_fallback:missing_key"
             
@@ -179,9 +198,10 @@ class AssistantOrchestrator:
                     from app.voice.speech_queue import speech_queue
                     command_id = router_result.get("command_id") or f"cmd_{uuid4().hex[:12]}"
                     speech_queue.submit(command_id, "ai_fallback", fallback_text, self.tts)
+                    queued_provider = "fish_audio" if self.settings.fish_audio_api_key and self.settings.fish_audio_voice_id else "text_only"
                     tts_res = {
-                        "mode": "none",
-                        "provider": "none",
+                        "mode": queued_provider,
+                        "provider": queued_provider,
                         "requested": True,
                         "called": False,
                         "async": True,
@@ -195,6 +215,7 @@ class AssistantOrchestrator:
                         "audio_bytes": 0,
                         "fallback_used": False,
                         "error": None,
+                        "error_type": None,
                         "latency_ms": 0,
                         "text": fallback_text[:500],
                     }
@@ -265,7 +286,7 @@ class AssistantOrchestrator:
             "response_text": router_result.get("response_text", router_result.get("text", "")),
             "spoken": spoken,
             "tts": tts_info,
-            "provider": router_result.get("provider", "none"),
+            "provider": router_result.get("provider") or "text_only",
             "model": router_result.get("model", ""),
             "local_matched": local_matched,
             "openrouter_called": bool(router_result.get("openrouter_called", False)),

@@ -18,6 +18,7 @@ from app.providers.offline_tts import OfflineTTS, text_only_response
 
 _PLAYBACK_LOCK = threading.Lock()
 _LAST_TTS_ERROR: str | None = None
+_LAST_TTS_ERROR_TYPE: str | None = None
 _LAST_PROVIDER_USED: str | None = None
 
 
@@ -42,6 +43,23 @@ def stop_all_audio() -> None:
         winsound.PlaySound(None, winsound.SND_PURGE)
     except Exception:
         pass
+
+
+def last_tts_state() -> dict[str, Any]:
+    return {
+        "last_provider": _LAST_PROVIDER_USED or "text_only",
+        "last_error_type": _LAST_TTS_ERROR_TYPE,
+        "last_error": _LAST_TTS_ERROR,
+    }
+
+
+def _fish_error_type(raw: str | None) -> str:
+    value = (raw or "").lower()
+    if "timeout" in value:
+        return "fish_timeout"
+    if value in {"fish_key_missing", "fish_voice_id_missing"}:
+        return value
+    return "fish_api_error"
     try:
         import pygame
         if pygame.mixer.get_init():
@@ -184,7 +202,7 @@ class SpeechOrchestrator:
         return providers
 
     def say(self, text: str, *, dry_run: bool = False, blocking: bool = False) -> dict[str, Any]:
-        global _LAST_TTS_ERROR, _LAST_PROVIDER_USED
+        global _LAST_TTS_ERROR, _LAST_TTS_ERROR_TYPE, _LAST_PROVIDER_USED
         logger = _speech_logger()
 
         safe_text = (text or "").strip() or "Сэр, слушаю вас."
@@ -219,6 +237,7 @@ class SpeechOrchestrator:
 
         if primary_result and primary_result["ok"]:
             _LAST_TTS_ERROR = None
+            _LAST_TTS_ERROR_TYPE = None
             _LAST_PROVIDER_USED = primary
             primary_result["latency_ms"] = primary_result.get("latency_ms") or int((time.perf_counter() - started) * 1000)
             logger.info("[SPEECH] Primary provider %s succeeded in %sms", primary, primary_result["latency_ms"])
@@ -227,17 +246,24 @@ class SpeechOrchestrator:
         # Handle failure/fallback
         last_error = primary_result.get("error") if primary_result else f"Provider {primary} not available"
         _LAST_TTS_ERROR = str(last_error)
+        _LAST_TTS_ERROR_TYPE = primary_result.get("error_type") if primary_result else _fish_error_type(str(last_error))
         logger.warning("[SPEECH] Primary provider %s failed: %s", primary, last_error)
 
         if not primary_fix:
             if primary == "fish_audio":
-                primary_fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в .env"
                 if not self.settings.fish_audio_api_key:
                     fish_error_type = "fish_key_missing"
+                    primary_fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env"
                 elif not self.settings.fish_audio_voice_id:
                     fish_error_type = "fish_voice_id_missing"
+                    primary_fix = "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env"
                 else:
-                    fish_error_type = "fish_audio_unavailable"
+                    fish_error_type = _fish_error_type(primary_result.get("error_type") if primary_result else None)
+                    primary_fix = (
+                        primary_result.get("fix")
+                        if primary_result and primary_result.get("fix")
+                        else "Fish Audio вернул ошибку. Проверьте voice_id, лимиты и logs/fish_audio.log."
+                    )
             else:
                 primary_fix = f"Основной голос {primary} недоступен. Ошибка: {last_error}."
 
@@ -274,6 +300,7 @@ class SpeechOrchestrator:
 
             if fallback_result and fallback_result["ok"]:
                 _LAST_TTS_ERROR = None
+                _LAST_TTS_ERROR_TYPE = None
                 _LAST_PROVIDER_USED = fallback
                 fallback_result["fallback_used"] = True
                 fallback_result["warning"] = f"Использован резервный голос ({fallback}), так как основной {primary} недоступен."
@@ -288,6 +315,7 @@ class SpeechOrchestrator:
         # Pure text only fallback
         logger.error("[SPEECH] All TTS providers failed. Returning text-only fallback.")
         _LAST_PROVIDER_USED = "text_only"
+        _LAST_TTS_ERROR_TYPE = fish_error_type or "fish_api_error"
         res = self._text_only(safe_text, "All TTS providers failed.", started, primary_fix)
         res["provider"] = "text_only"
         if fish_error_type:
@@ -340,12 +368,15 @@ class SpeechOrchestrator:
         return None
 
     def _text_only(self, text: str, error: str, started: float, fix: str | None = None) -> dict[str, Any]:
-        global _LAST_PROVIDER_USED
+        global _LAST_PROVIDER_USED, _LAST_TTS_ERROR, _LAST_TTS_ERROR_TYPE
         _LAST_PROVIDER_USED = "text_only"
+        _LAST_TTS_ERROR = error
         result = _normalize(text_only_response(text), text, "text_only")
         result["error"] = error
         result["latency_ms"] = int((time.perf_counter() - started) * 1000)
         result["fix"] = fix or "Голос Джарвиса временно недоступен. Проверьте Fish Audio key / voice id / лимиты."
+        if not result.get("error_type"):
+            result["error_type"] = _LAST_TTS_ERROR_TYPE or "fish_api_error"
         return result
 
     def say_greeting(self, text: str) -> dict[str, Any]:
@@ -378,9 +409,11 @@ class SpeechOrchestrator:
         return {
             "voice_locked": voice_locked,
             "primary": primary,
+            "require_fish_audio": voice_locked,
             "fallback_enabled": fallback_enabled,
             "fallback_used": fallback_used,
-            "last_provider_used": _LAST_PROVIDER_USED or "none",
+            "last_provider_used": _LAST_PROVIDER_USED or "text_only",
+            "last_error_type": _LAST_TTS_ERROR_TYPE,
             "voice_identity": voice_identity,
             "primary_ready": (
                 self.fish.available() if primary == "fish_audio"

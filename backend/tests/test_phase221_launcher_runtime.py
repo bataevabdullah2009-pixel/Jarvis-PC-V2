@@ -68,7 +68,8 @@ def test_start_listener_blocked_when_no_audio(monkeypatch) -> None:
     body = response.json()
     assert body["ok"] is False
     assert body["data"]["running"] is False
-    assert body["data"]["state"] == "stopped"
+    assert body["data"]["state"] == "blocked"
+    assert body["data"]["last_error_type"] == "microphone_no_audio"
 
 
 def test_assistant_ask_works_with_listener_disabled(monkeypatch) -> None:
@@ -87,6 +88,7 @@ def test_assistant_ask_works_with_listener_disabled(monkeypatch) -> None:
 
     monkeypatch.setattr(AIPlanner, "plan", fake_plan)
     # Even when voice listener is stopped, assistant/ask should work!
+    voice_listener.stop()
     assert voice_listener.state == "stopped"
     response = client.post(
         "/assistant/ask",

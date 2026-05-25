@@ -537,8 +537,8 @@ class CommandRouter:
 
         if skip_tts:
             tts_result = {
-                "mode": "none",
-                "provider": "none",
+                "mode": "text_only",
+                "provider": "text_only",
                 "requested": False,
                 "called": False,
                 "spoken": False,
@@ -550,6 +550,7 @@ class CommandRouter:
                 "audio_bytes": 0,
                 "fallback_used": False,
                 "error": "Skipped because speak was disabled.",
+                "error_type": "tts_skipped",
                 "latency_ms": 0,
                 "text": safe_text[:500],
             }
@@ -563,7 +564,7 @@ class CommandRouter:
             tts_enqueue_ms = int((time.perf_counter() - enqueue_started) * 1000)
         else:
             # Synchronous generate & playback
-            tts_result = self.tts.speak(safe_text, dry_run=tts_dry_run)
+            tts_result = self.tts.speak(safe_text, dry_run=tts_dry_run, blocking=not tts_dry_run)
             tts_ms = int((time.perf_counter() - tts_started) * 1000)
             if tts_result.get("latency_ms") is None:
                 tts_result["latency_ms"] = tts_ms
@@ -647,9 +648,10 @@ class CommandRouter:
         return result
 
     def _queued_tts_result(self, text: str) -> dict[str, Any]:
+        provider = "fish_audio" if self.settings.fish_audio_api_key and self.settings.fish_audio_voice_id else "text_only"
         return {
-            "mode": "none",
-            "provider": "none",
+            "mode": provider,
+            "provider": provider,
             "requested": True,
             "called": False,
             "async": True,
@@ -663,6 +665,7 @@ class CommandRouter:
             "audio_bytes": 0,
             "fallback_used": False,
             "error": None,
+            "error_type": None,
             "latency_ms": 0,
             "text": text[:500],
         }

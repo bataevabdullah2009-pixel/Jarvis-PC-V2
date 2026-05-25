@@ -115,8 +115,11 @@ def check_powershell(path: Path, errors: list[str]) -> None:
 def check_required_file_lengths(errors: list[str]) -> None:
     required = {
         "tools/check_source_format.py": 120,
-        "README.md": 30,
+        "tools/start_jarvis.ps1": 80,
+        "README.md": 50,
+        "backend/run_backend.py": 10,
         "backend/app/main.py": 300,
+        "frontend/src/api/client.ts": 150,
     }
     for relative, minimum in required.items():
         path = ROOT / relative

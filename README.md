@@ -1,22 +1,18 @@
 # JARVIS PC V2 Minimal Assistant
 
-## Главный запуск
+## Главный Запуск
 
-Запускайте JARVIS только из корня проекта:
+Запускайте JARVIS из корня проекта:
 
 ```bat
 START_JARVIS.bat
 ```
 
-Это единственный нормальный launcher для обычной работы.
+`START_JARVIS.bat` является основным launcher для обычной работы.
 
-## Runtime Port
+Backend работает на фиксированном порту `18000`.
 
-JARVIS backend теперь использует постоянный порт:
-
-```text
-18000
-```
+Frontend работает на порту `5173`.
 
 Backend URL:
 
@@ -24,56 +20,146 @@ Backend URL:
 http://127.0.0.1:18000
 ```
 
-Frontend получает адрес backend через:
+Frontend API base:
 
 ```text
 VITE_JARVIS_API_BASE=http://127.0.0.1:18000
 ```
 
-Если другой backend занимает порт `8000`, это больше не мешает JARVIS. Порт `8000` не является runtime-портом JARVIS.
+Если другой backend занимает порт `8000`, это не мешает JARVIS.
 
-## Что Делает START_JARVIS
+Порт `8000` не является runtime-портом JARVIS.
 
-`START_JARVIS.bat` вызывает `tools\start_jarvis.ps1`.
+## AI Providers
 
-Launcher:
+JARVIS использует provider routing:
 
-- определяет root проекта;
-- задает `JARVIS_BACKEND_PORT=18000`, если переменная не задана;
-- задает `VITE_JARVIS_API_BASE` для frontend;
-- останавливает только старые JARVIS процессы;
-- освобождает только выбранный JARVIS port;
-- игнорирует `TIME_WAIT` и PID 0;
-- не убивает чужие процессы без ручного вмешательства;
-- проверяет `backend\.env`;
-- проверяет backend dependencies;
-- проверяет frontend dependencies;
-- запускает FastAPI backend;
-- ждет `/health`;
-- запускает Vite frontend dev server;
-- ждет `http://127.0.0.1:5173`;
-- запускает Electron;
-- при закрытии Electron останавливает backend и frontend.
+```text
+JARVIS_AI_PRIMARY=groq
+JARVIS_AI_FALLBACK=openrouter
+JARVIS_AI_ALLOW_LOCAL_FALLBACK=true
+```
 
-## Legacy Launchers
+Groq работает через OpenAI-compatible endpoint:
 
-Эти файлы оставлены только для совместимости:
+```text
+https://api.groq.com/openai/v1/chat/completions
+```
 
-- `RUN_DEV_FRESH.bat` перенаправляет на `START_JARVIS.bat`.
-- `UPDATE_AND_LAUNCH_APP.bat` предназначен для update/build сценария.
+OpenRouter остается fallback provider.
 
-Для обычного запуска legacy launchers не используйте.
+Если оба облачных provider недоступны, JARVIS возвращает локальный fallback text.
+
+Локальные команды выполняются без обращения к AI.
+
+Выбор primary/fallback доступен через настройки UI и через `.env`.
+
+## Voice Stack
+
+Основной голос:
+
+```text
+JARVIS_TTS_PRIMARY=fish_audio
+JARVIS_TTS_REQUIRE_FISH_AUDIO=true
+JARVIS_TTS_FALLBACK_ENABLED=false
+```
+
+В Jarvis style запрещены Edge TTS и pyttsx3 fallback.
+
+Если Fish Audio недоступен, runtime возвращает `text_only` с точной причиной.
+
+`provider=none` считается ошибкой и не должен появляться в TTS ответах.
+
+Очередь TTS публикует финальные статусы:
+
+```text
+tts.queued
+tts.started
+tts.generated
+tts.played
+tts.failed
+```
+
+`/voice/tts-status` показывает последний job, provider, ошибку и размер очереди.
+
+## Local Voice Providers
+
+Архитектура подготовлена для локальных voice providers:
+
+```text
+fish_audio
+piper_local
+xtts_local
+gpt_sovits_local
+text_only
+```
+
+Piper, XTTS и GPT-SoVITS не устанавливаются автоматически.
+
+Диагностика доступна через:
+
+```text
+GET /debug/local-voice-status
+```
+
+## Listener
+
+Listener по умолчанию включен:
+
+```text
+JARVIS_LISTENER_ENABLED=true
+JARVIS_LISTENER_AUTOSTART=true
+JARVIS_WAKE_WORDS=джарвис,чарли,jarvis
+JARVIS_COMMAND_RECORD_SECONDS=6
+JARVIS_COOLDOWN_MS=2500
+JARVIS_IGNORE_SELF_AUDIO=true
+```
+
+Если микрофон или STT не готовы, backend не падает.
+
+Listener переходит в `blocked` и возвращает точную причину.
+
+Статус доступен через:
+
+```text
+GET /voice/listener-status
+```
+
+## Anti-Echo
+
+Пока JARVIS говорит, listener не отправляет transcript в assistant.
+
+После TTS включается cooldown.
+
+Transcript, похожий на последний TTS text, игнорируется.
+
+После повторяющегося self-echo listener блокируется.
+
+Новый assistant request сериализуется и не стартует параллельно с предыдущим.
 
 ## Diagnostics
 
-Проверка backend:
+Основные endpoints:
 
 ```powershell
 curl.exe http://127.0.0.1:18000/health
-curl.exe http://127.0.0.1:18000/runtime/process-info
 curl.exe http://127.0.0.1:18000/debug/env-status
-curl.exe http://127.0.0.1:18000/debug/network-status
+curl.exe http://127.0.0.1:18000/debug/ai-provider-status
 curl.exe http://127.0.0.1:18000/debug/voice-provider-status
+curl.exe http://127.0.0.1:18000/debug/local-voice-status
+curl.exe http://127.0.0.1:18000/voice/listener-status
+```
+
+Проверка Groq:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:18000/debug/test-groq -H "Content-Type: application/json" -d "{\"text\":\"Ответь одним словом: OK\"}"
+```
+
+Проверка голоса:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:18000/debug/test-jarvis-voice -H "Content-Type: application/json" -d "{\"text\":\"Проверка голоса Джарвиса.\"}"
 ```
 
 ## Smoke Runtime
@@ -82,14 +168,14 @@ curl.exe http://127.0.0.1:18000/debug/voice-provider-status
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\smoke_runtime.ps1
 ```
 
-Smoke проверяет backend startup, diagnostics endpoints, listener disabled state и assistant ask без зависимости от порта `8000`.
+Smoke проверяет backend startup, diagnostics endpoints, listener state и assistant ask на порту `18000`.
 
 ## Source Format Guard
 
-Перед коммитом:
+Перед commit:
 
 ```powershell
 python tools\check_source_format.py
 ```
 
-Guard проверяет переносы строк, минимальное число строк у launcher-файлов, длинную первую строку и компиляцию Python-файлов.
+Guard проверяет переносы строк, минимальную длину launcher-файлов, длинную первую строку и компиляцию Python.

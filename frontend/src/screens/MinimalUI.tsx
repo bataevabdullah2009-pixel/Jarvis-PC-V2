@@ -123,6 +123,15 @@ export function MinimalUI({
 
   const latency = state.lastResult?.latency;
   const ttsGenerateMs = latency?.tts_generate_ms ?? latency?.tts_ms ?? null;
+  const ttsProvider = state.lastResult?.tts?.provider;
+  const invalidTtsProvider = ttsProvider === "none";
+  const visibleTtsProvider = invalidTtsProvider ? "Backend вернул некорректный TTS provider none" : (ttsProvider ?? "text_only");
+  const textOnlyFix =
+    state.lastResult?.tts?.fix ||
+    state.voiceProviderStatus?.fixes?.[0] ||
+    (state.voiceProviderStatus?.fish_key_present && state.voiceProviderStatus?.fish_voice_id_present
+      ? "Проверьте доступность Fish Audio API и лимиты."
+      : "Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env");
 
   const voiceLocked =
     Boolean(state.ttsStatus?.voice_locked) ||
@@ -332,7 +341,7 @@ export function MinimalUI({
                       <div>
                         <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>Voice: </span>
                         <strong style={{ color: "var(--accent-2)" }}>
-                          {state.lastResult.tts?.provider ?? "none"} 
+                          {visibleTtsProvider}
                           {state.lastResult.tts?.status ? ` (${state.lastResult.tts?.status})` : ""}
                           {ttsGenerateMs ? ` / ${ttsGenerateMs} ms` : ""}
                         </strong>
@@ -342,14 +351,20 @@ export function MinimalUI({
                     {/* Fallback voice used yellow warning */}
                     {state.lastResult.tts?.fallback_used && (
                       <div style={{ color: "#FFE054", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px" }}>
-                        ⚠️ Использован резервный голос: {state.lastResult.tts?.provider ?? "pyttsx3/edge_tts"}
+                        Использован резервный голос: {state.lastResult.tts?.provider ?? "pyttsx3/edge_tts"}
                       </div>
                     )}
                     
                     {/* Locked voice but Fish failed warning */}
+                    {invalidTtsProvider && (
+                      <div style={{ color: "#FF5E5E", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px" }}>
+                        Backend вернул некорректный TTS provider none
+                      </div>
+                    )}
+
                     {state.lastResult.tts?.provider === "text_only" && voiceLocked && (
                       <div style={{ color: "#FF5E5E", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px" }}>
-                        ⚠️ Голос Джарвиса недоступен. Чужой голос отключён.
+                        Голос Джарвиса недоступен. Тип: {(state.lastResult.tts as any)?.error_type ?? state.lastResult.tts?.status ?? state.voiceProviderStatus?.last_error_type ?? "unknown"}. Решение: {textOnlyFix}
                       </div>
                     )}
                   </div>
@@ -476,6 +491,7 @@ function ControlPanel({
   const listener = state.listenerStatus;
   const isRunning = isBackendAvailable ? Boolean(listener?.running) : false;
   const listenerState = isBackendAvailable ? (listener?.state || "stopped") : "backend_unavailable";
+  const listenerReason = listener?.last_error_type || listener?.reason || listener?.failed_check || listener?.last_error || "неизвестная причина";
   
   let listenerStatusLabel = "Live listener отключен";
   let statusColor = "rgba(255, 255, 255, 0.4)";
@@ -483,6 +499,9 @@ function ControlPanel({
   
   if (listenerState === "backend_unavailable") {
     listenerStatusLabel = "Backend не запущен. Запустите START_JARVIS.bat";
+    statusColor = "#FF3333";
+  } else if (listenerState === "blocked") {
+    listenerStatusLabel = `Live listener заблокирован: ${listenerReason}`;
     statusColor = "#FF3333";
   } else if (isRunning) {
     if (listenerState === "listening_for_trigger" || listenerState === "idle") {
@@ -504,7 +523,7 @@ function ControlPanel({
       statusColor = "#FFE054";
     }
   } else if (listenerState === "error") {
-    listenerStatusLabel = "Ошибка listener";
+    listenerStatusLabel = `Live listener заблокирован: ${listenerReason}`;
     statusColor = "#FF3333";
   }
   
@@ -1014,8 +1033,40 @@ function SettingsPanel({
       <div className="settings-list">
         <InfoCard label="Версия" value={state.settings?.version ?? "0.1.0"} />
         <InfoCard label="Лицензия" value="Отключена" />
+        <InfoCard label="Groq" value={state.settings?.groq_configured ? "configured" : "missing"} />
         <InfoCard label="OpenRouter" value={state.settings?.openrouter_configured ? "configured" : "missing"} />
         <InfoCard label="Fish Audio" value={state.settings?.fish_audio_configured ? "configured" : "missing"} />
+      </div>
+      <div className="settings-section">
+        <div className="panel-heading no-margin">
+          <Activity size={18} />
+          <h3>AI Provider</h3>
+        </div>
+        <label className="field-row">
+          <span>Primary</span>
+          <select value={state.settings?.ai_primary ?? "groq"} onChange={(event) => onPatchSettings({ ai_primary: event.target.value })}>
+            <option value="groq">Groq</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </label>
+        <label className="field-row">
+          <span>Fallback</span>
+          <select value={state.settings?.ai_fallback ?? "openrouter"} onChange={(event) => onPatchSettings({ ai_fallback: event.target.value })}>
+            <option value="openrouter">OpenRouter</option>
+            <option value="groq">Groq</option>
+          </select>
+        </label>
+        <ToggleRow
+          label="Local fallback"
+          checked={Boolean(state.settings?.ai_allow_local_fallback ?? true)}
+          onChange={(value) => onPatchSettings({ ai_allow_local_fallback: value })}
+        />
+        <div className="settings-list" style={{ marginTop: "12px", marginBottom: 0 }}>
+          <InfoCard label="Primary status" value={state.aiProviderStatus?.primary ?? state.settings?.ai_primary ?? "groq"} />
+          <InfoCard label="Groq model" value={state.aiProviderStatus?.groq.model ?? state.settings?.groq_model ?? "llama-3.1-8b-instant"} />
+          <InfoCard label="Groq status" value={state.aiProviderStatus?.groq.available ? "available" : state.aiProviderStatus?.groq.last_error_type ?? "unknown"} />
+          <InfoCard label="Fallback status" value={state.aiProviderStatus?.fallback ?? state.settings?.ai_fallback ?? "openrouter"} />
+        </div>
       </div>
       <div className="settings-section" style={{ marginTop: '16px', background: 'rgba(8, 13, 22, 0.4)' }}>
         <div className="panel-heading no-margin">

@@ -148,7 +148,8 @@ def test_listener_does_not_start_when_no_audio():
         
         res = voice_listener.start(device_id="1", wake_word_enabled=True, clap_enabled=True, force_start=False)
         assert res["ok"] is False
-        assert "calibration" in res["data"]["errors"][0]
+        assert res["data"]["state"] == "blocked"
+        assert res["data"]["last_error_type"] == "microphone_no_audio"
 
 
 # 7. test_listener_rate_limit_prevents_loop

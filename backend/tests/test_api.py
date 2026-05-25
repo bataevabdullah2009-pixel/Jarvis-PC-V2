@@ -145,8 +145,8 @@ def test_assistant_ask_ai_without_key(monkeypatch) -> None:
     assert body["ok"] is True
     data = body["data"]
     assert data["mode"] == "ai_limited"
-    assert data["provider"] == "none"
-    assert "не подключён" in data["response_text"]
+    assert data["provider"] == "text_only"
+    assert "облачный AI сейчас недоступен" in data["response_text"]
 
 
 def test_setup_readiness() -> None:
@@ -203,7 +203,7 @@ def test_assistant_ask_no_key_no_crash(monkeypatch) -> None:
     body = response.json()
     assert body["ok"] is True
     assert body["data"]["mode"] == "ai_limited"
-    assert "не подключён" in body["data"]["response_text"]
+    assert "облачный AI сейчас недоступен" in body["data"]["response_text"]
 
 
 def test_assistant_ask_mock_ai_success(monkeypatch) -> None:
@@ -489,4 +489,3 @@ def test_assistant_ask_local_command_does_not_call_openrouter(monkeypatch) -> No
     assert data["mode"] == "local"
     assert data["openrouter_called"] is False
     assert openrouter_called_flag is False
-

@@ -197,7 +197,7 @@ def test_jarvis_voice_lock_blocks_edge_and_pyttsx3(monkeypatch) -> None:
     result = orchestrator.say("Jarvis test")
 
     assert result["provider"] == "text_only"
-    assert result["error_type"] == "fish_audio_unavailable"
+    assert result["error_type"] == "fish_api_error"
     assert result["fallback_used"] is False
     assert edge_called["value"] is False
     assert offline_called["value"] is False

@@ -15,5 +15,6 @@
   "clap_enabled": true,
   "voice_volume": 82,
   "voice_wake_enabled": true,
-  "runtime_mode": "online"
+  "runtime_mode": "online",
+  "autostart_enabled": true
 }
