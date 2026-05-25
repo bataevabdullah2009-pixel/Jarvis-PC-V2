@@ -280,8 +280,8 @@ class Settings:
     workspace_project_path: str = r"C:\Jarvis\jarvis-car"
     open_terminal_with_workspace: bool = False
     voice_profile: str = "Jarvis style"
-    voice_wake_enabled: bool = False
-    clap_enabled: bool = False
+    voice_wake_enabled: bool = True
+    clap_enabled: bool = True
     runtime_mode: str = "hybrid"
     autostart_enabled: bool = False
     voice_volume: int = 70
@@ -360,11 +360,30 @@ class Settings:
         load_environment()
         data = _read_json(CONFIG_DIR / "settings.json", {})
         settings = cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
+
+        def env_default(field_name: str, *names: str, default: str | None = None) -> str | None:
+            if field_name in data:
+                value = data.get(field_name)
+                return str(value) if value is not None else default
+            return env_value(*names, default=default)
+
+        def env_bool_default(field_name: str, *names: str, default: bool = False) -> bool:
+            if field_name in data:
+                return bool(data.get(field_name))
+            return env_bool(*names, default=default)
+
+        def env_bool_override(field_name: str, *names: str, default: bool = False) -> bool:
+            if env_value(*names) is not None:
+                return env_bool(*names, default=default)
+            if field_name in data:
+                return bool(data.get(field_name))
+            return default
+
         settings.vosk_model_path = env_value("JARVIS_VOSK_MODEL_PATH", "VOSK_MODEL_PATH", default=settings.vosk_model_path) or settings.vosk_model_path
         settings.stt_provider = env_value("JARVIS_STT_PROVIDER", default=settings.stt_provider) or settings.stt_provider
-        settings.ai_primary = env_value("JARVIS_AI_PRIMARY", "AI_PRIMARY", default=settings.ai_primary) or settings.ai_primary
-        settings.ai_fallback = env_value("JARVIS_AI_FALLBACK", "AI_FALLBACK", default=settings.ai_fallback) or settings.ai_fallback
-        settings.ai_allow_local_fallback = env_bool("JARVIS_AI_ALLOW_LOCAL_FALLBACK", "AI_ALLOW_LOCAL_FALLBACK", default=settings.ai_allow_local_fallback)
+        settings.ai_primary = env_default("ai_primary", "JARVIS_AI_PRIMARY", "AI_PRIMARY", default=settings.ai_primary) or settings.ai_primary
+        settings.ai_fallback = env_default("ai_fallback", "JARVIS_AI_FALLBACK", "AI_FALLBACK", default=settings.ai_fallback) or settings.ai_fallback
+        settings.ai_allow_local_fallback = env_bool_default("ai_allow_local_fallback", "JARVIS_AI_ALLOW_LOCAL_FALLBACK", "AI_ALLOW_LOCAL_FALLBACK", default=settings.ai_allow_local_fallback)
         settings.openrouter_api_key = env_value("JARVIS_OPENROUTER_API_KEY", "OPENROUTER_API_KEY")
         settings.openrouter_model = env_value("JARVIS_OPENROUTER_MODEL", "OPENROUTER_MODEL", default=settings.openrouter_model) or settings.openrouter_model
         settings.groq_api_key = env_value("JARVIS_GROQ_API_KEY", "GROQ_API_KEY")
@@ -444,10 +463,12 @@ class Settings:
         settings.license_enabled = os.getenv("LICENSE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         settings.allowed_folders = [settings.workspace_project_path]
         
-        settings.listener_enabled = env_bool("JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=True)
-        settings.listener_autostart = env_bool("JARVIS_LISTENER_AUTOSTART", "LISTENER_AUTOSTART", default=True)
-        settings.wake_words = env_value("JARVIS_WAKE_WORDS", "WAKE_WORDS", default="джарвис,чарли,jarvis") or "джарвис,чарли,jarvis"
-        settings.listener_device_id = env_value("JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
+        settings.listener_enabled = env_bool_override("listener_enabled", "JARVIS_LISTENER_ENABLED", "LISTENER_ENABLED", default=True)
+        settings.listener_autostart = env_bool_override("listener_autostart", "JARVIS_LISTENER_AUTOSTART", "LISTENER_AUTOSTART", default=True)
+        settings.voice_wake_enabled = env_bool_default("voice_wake_enabled", "JARVIS_VOICE_WAKE_ENABLED", "VOICE_WAKE_ENABLED", default=settings.voice_wake_enabled)
+        settings.clap_enabled = env_bool_default("clap_enabled", "JARVIS_CLAP_ENABLED", "CLAP_ENABLED", default=settings.clap_enabled)
+        settings.wake_words = env_default("wake_words", "JARVIS_WAKE_WORDS", "WAKE_WORDS", default="джарвис,чарли,jarvis") or "джарвис,чарли,jarvis"
+        settings.listener_device_id = env_default("listener_device_id", "JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
         try:
             settings.command_record_seconds = int(env_value("JARVIS_COMMAND_RECORD_SECONDS", "COMMAND_RECORD_SECONDS", default="6") or "6")
         except ValueError:
@@ -551,6 +572,10 @@ def patch_settings(patch: dict[str, Any]) -> Settings:
         "autostart_enabled",
         "voice_volume",
         "offline_mode",
+        "listener_enabled",
+        "listener_autostart",
+        "listener_device_id",
+        "wake_words",
     }
     current = _read_json(CONFIG_DIR / "settings.json", {})
     for key, value in patch.items():
@@ -558,7 +583,7 @@ def patch_settings(patch: dict[str, Any]) -> Settings:
             current[key] = value
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with (CONFIG_DIR / "settings.json").open("w", encoding="utf-8") as file:
+    with (CONFIG_DIR / "settings.json").open("w", encoding="utf-8", newline="\n") as file:
         json.dump(current, file, ensure_ascii=False, indent=2)
         file.write("\n")
 

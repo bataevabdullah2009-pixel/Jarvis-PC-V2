@@ -130,10 +130,10 @@ class VoiceListener:
                 fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
             elif not microphone_ok:
                 failed_check = "microphone_no_audio"
-                fix = "Выберите другой микрофон или включите доступ Windows"
+                fix = "Выберите другой микрофон или включите доступ Windows к микрофону"
             elif not stt_configured:
                 failed_check = "stt_not_configured"
-                fix = "Укажите VOSK model path"
+                fix = "Проверьте путь JARVIS_VOSK_MODEL_PATH"
             elif not no_current_tts_speaking:
                 failed_check = "tts_speaking"
                 fix = "Пожалуйста, подождите, пока Джарвис договорит фразу."
@@ -306,13 +306,18 @@ class VoiceListener:
         if not settings.listener_enabled:
             reason = "listener disabled by default"
 
+        running = self.state != "stopped" and self._thread is not None and self._thread.is_alive()
+        display_state = self.state
+        if settings.listener_enabled and settings.listener_autostart and not running and not gate_res["safe_to_start"]:
+            display_state = "blocked"
+
         return {
             "ok": True,
             "data": {
                 "enabled": settings.listener_enabled,
                 "autostart": settings.listener_autostart,
-                "running": self.state != "stopped" and self._thread is not None and self._thread.is_alive(),
-                "state": self.state,
+                "running": running,
+                "state": display_state,
                 "device_id": str(self.device_id),
                 "device_name": self.device_name,
                 "wake_word_enabled": self.wake_word_enabled,

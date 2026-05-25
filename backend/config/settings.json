@@ -16,5 +16,10 @@
   "voice_volume": 82,
   "voice_wake_enabled": true,
   "runtime_mode": "online",
-  "autostart_enabled": true
+  "autostart_enabled": true,
+  "ai_fallback": "openrouter",
+  "ai_primary": "groq",
+  "listener_enabled": true,
+  "listener_autostart": true,
+  "listener_device_id": "default"
 }

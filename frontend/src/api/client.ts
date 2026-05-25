@@ -226,6 +226,10 @@ export type SettingsData = {
   tts_fallback?: string;
   tts_fallback_enabled?: boolean;
   tts_require_fish_audio?: boolean;
+  listener_enabled?: boolean;
+  listener_autostart?: boolean;
+  listener_device_id?: string;
+  wake_words?: string;
 };
 
 export type CommandDefinition = {
@@ -263,6 +267,14 @@ export type TTSStatusData = {
   last_provider_used?: string | null;
   last_error: string | null;
   voice_identity?: "jarvis" | "fallback" | "text_only" | string;
+  queue_size?: number;
+  active_job_id?: string | null;
+  last_job_id?: string | null;
+  last_job_age_seconds?: number;
+  last_job_status?: "queued" | "started" | "generated" | "playing" | "played" | "failed" | "none" | string | null;
+  last_provider?: string | null;
+  last_error_type?: string | null;
+  last_played_at?: number | null;
 };
 
 export type BuildInfoData = {
@@ -334,6 +346,11 @@ export type VoiceProviderStatusData = {
   fish_key_present: boolean;
   fish_voice_id_present: boolean;
   selected_provider: "fish_audio" | "text_only";
+  queue_size: number;
+  active_job_id: string | null;
+  last_job_id: string | null;
+  last_job_status: string;
+  last_job_age_seconds?: number;
   last_provider: string;
   last_error_type: string | null;
   last_error: string | null;
@@ -470,6 +487,10 @@ export const api = {
     }),
   voiceDependencies: () => request<VoiceDependencyData>("/voice/dependency-check"),
   ttsStatus: () => request<TTSStatusData>("/voice/tts-status"),
+  ttsReset: () =>
+    request<TTSStatusData>("/voice/tts-reset", {
+      method: "POST"
+    }),
   say: (text: string) =>
     request<SayResult>("/voice/say", {
       method: "POST",
@@ -489,7 +510,7 @@ export const api = {
       body: JSON.stringify({})
     }),
   testGroq: () =>
-    rawRequest<ProviderTestResult>("/debug/test-groq", {
+    request<ProviderTestResult>("/debug/test-groq", {
       method: "POST",
       body: JSON.stringify({ text: "Ответь одним словом: OK" })
     }),
@@ -532,7 +553,7 @@ export const api = {
       method: "POST"
     }),
   calibrateMic: (deviceId: string, silenceSeconds = 2, speechSeconds = 3) =>
-    rawRequest<any>("/voice/calibrate-mic", {
+    request<any>("/voice/calibrate-mic", {
       method: "POST",
       body: JSON.stringify({ device_id: deviceId, silence_seconds: silenceSeconds, speech_seconds: speechSeconds })
     }),

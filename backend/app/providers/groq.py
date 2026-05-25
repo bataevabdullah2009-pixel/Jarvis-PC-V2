@@ -49,17 +49,17 @@ def classify_groq_exception(exc: BaseException) -> str:
 def _fix_for(status_code: int | None, error_type: str) -> str:
     if error_type == "groq_key_missing":
         return "Добавьте JARVIS_GROQ_API_KEY или GROQ_API_KEY в .env."
-    if error_type == "model_missing":
-        return "Добавьте JARVIS_GROQ_MODEL в .env."
+    if error_type in {"model_missing", "groq_model_not_found"}:
+        return "Проверьте JARVIS_GROQ_MODEL в .env."
     if error_type in {"network_timeout", "network_error", "ssl_error"}:
         return "Проверьте интернет, VPN/proxy и доступ к api.groq.com."
-    if error_type == "rate_limited" or status_code == 429:
-        return "Groq вернул rate limit. Подождите или переключитесь на OpenRouter fallback."
-    if status_code == 401:
+    if error_type == "groq_rate_limited" or status_code == 429:
+        return "Groq вернул rate limit. Подождите или используйте OpenRouter fallback."
+    if error_type == "groq_key_invalid" or status_code == 401:
         return "Groq API key неверный или отозван."
-    if status_code == 403:
-        return "Groq API key не имеет доступа к выбранной модели."
-    if status_code == 404:
+    if error_type in {"groq_forbidden", "groq_model_forbidden"} or status_code == 403:
+        return "Groq недоступен: forbidden. Используется OpenRouter."
+    if error_type == "groq_model_not_found" or status_code == 404:
         return "Модель Groq не найдена. Проверьте JARVIS_GROQ_MODEL."
     if status_code and status_code >= 500:
         return "Groq временно недоступен. Повторите позже."
@@ -266,13 +266,13 @@ class GroqPlanner:
     @staticmethod
     def _status_error_type(status_code: int) -> str:
         if status_code == 401:
-            return "invalid_key"
+            return "groq_key_invalid"
         if status_code == 403:
-            return "forbidden"
+            return "groq_forbidden"
         if status_code == 404:
-            return "model_not_found"
+            return "groq_model_not_found"
         if status_code == 429:
-            return "rate_limited"
+            return "groq_rate_limited"
         return "provider_error"
 
     @staticmethod

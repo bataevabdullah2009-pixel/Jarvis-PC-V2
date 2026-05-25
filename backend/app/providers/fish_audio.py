@@ -74,7 +74,7 @@ def _fix_for(status_code: int | None, error_type: str) -> str:
         return "Fish Audio SSL/network timeout: check network, proxy, DNS, or endpoint reachability."
     if error_type in {"ConnectError", "NetworkError", "TransportError"}:
         return "Fish Audio network error: check network, proxy, DNS, or TLS interception."
-    if error_type == "playback_failed":
+    if error_type in {"playback_failed", "playback_error"}:
         return "Audio was received, but local playback failed."
     return "See logs/fish_audio.log and logs/tts.log."
 

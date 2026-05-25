@@ -43,6 +43,13 @@ def stop_all_audio() -> None:
         winsound.PlaySound(None, winsound.SND_PURGE)
     except Exception:
         pass
+    try:
+        import pygame
+        if pygame.mixer.get_init():
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+    except Exception:
+        pass
 
 
 def last_tts_state() -> dict[str, Any]:
@@ -59,14 +66,9 @@ def _fish_error_type(raw: str | None) -> str:
         return "fish_timeout"
     if value in {"fish_key_missing", "fish_voice_id_missing"}:
         return value
+    if value == "playback_error":
+        return "playback_error"
     return "fish_api_error"
-    try:
-        import pygame
-        if pygame.mixer.get_init():
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
-    except Exception:
-        pass
 
 
 def play_audio_sync(audio_bytes: bytes, audio_format: str) -> None:
@@ -106,6 +108,7 @@ def play_audio_sync(audio_bytes: bytes, audio_format: str) -> None:
                 winsound.PlaySound(patched_audio, winsound.SND_MEMORY)
             except Exception as e:
                 logger.error("[PLAYBACK] winsound error: %s", e)
+                raise RuntimeError(f"playback_error: {e}") from e
 
         elif audio_format.lower() == "mp3":
             try:
@@ -114,7 +117,7 @@ def play_audio_sync(audio_bytes: bytes, audio_format: str) -> None:
                     pygame.mixer.init()
             except Exception as e:
                 logger.error("[PLAYBACK] pygame.mixer.init error: %s", e)
-                return
+                raise RuntimeError(f"playback_error: {e}") from e
 
             temp_path = None
             try:
@@ -130,6 +133,7 @@ def play_audio_sync(audio_bytes: bytes, audio_format: str) -> None:
                 pygame.mixer.music.unload()
             except Exception as e:
                 logger.error("[PLAYBACK] pygame play error: %s", e)
+                raise RuntimeError(f"playback_error: {e}") from e
             finally:
                 if temp_path and os.path.exists(temp_path):
                     try:
@@ -163,6 +167,8 @@ def _normalize(result: dict[str, Any], text: str, provider: str) -> dict[str, An
         "audio_available": audio_available,
         "fallback_used": bool(result.get("fallback_used", False)),
         "error": None if ok else result.get("error") or result.get("error_message") or "TTS provider unavailable",
+        "error_type": result.get("error_type"),
+        "fix": result.get("fix"),
         "text": result.get("text") or text,
         "status": status,
         "latency_ms": result.get("latency_ms", 0),
@@ -331,10 +337,25 @@ class SpeechOrchestrator:
                 return _normalize({"ok": True, "status": "dry_run"}, text, "fish_audio")
             synth = self.fish.synthesize(text)
             if synth["ok"]:
-                if blocking:
-                    play_audio_sync(synth["audio"], synth["format"])
-                else:
-                    play_audio_background(synth["audio"], synth["format"])
+                try:
+                    if blocking:
+                        play_audio_sync(synth["audio"], synth["format"])
+                    else:
+                        play_audio_background(synth["audio"], synth["format"])
+                except Exception as exc:
+                    return _normalize(
+                        {
+                            **synth,
+                            "ok": False,
+                            "spoken": False,
+                            "played": False,
+                            "status": "failed",
+                            "error": str(exc),
+                            "error_type": "playback_error",
+                        },
+                        text,
+                        "fish_audio",
+                    )
                 return _normalize({**synth, "spoken": True, "played": True, "status": "completed"}, text, "fish_audio")
             return _normalize(synth, text, "fish_audio")
 

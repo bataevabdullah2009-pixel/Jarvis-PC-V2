@@ -25,10 +25,12 @@ class SpeechQueue:
         self._current_task: TTSTask | None = None
         self._last_job_id: str | None = None
         self._last_job_status: str | None = None
+        self._last_job_created_at: float | None = None
         self._last_provider: str | None = None
         self._last_error_type: str | None = None
         self._last_error: str | None = None
         self._last_result: dict[str, Any] | None = None
+        self._last_played_at: float | None = None
         self._cancel_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_thread.start()
@@ -73,10 +75,12 @@ class SpeechQueue:
         with self._lock:
             self._last_job_id = command_id
             self._last_job_status = "queued"
+            self._last_job_created_at = task.created_at
             self._last_provider = None
             self._last_error_type = None
             self._last_error = None
             self._last_result = None
+            self._last_played_at = None
         event_bus.emit("tts.queued", {"job_id": command_id, "command_id": command_id, "route": route})
         event_bus.emit("assistant.tts.queued", {"command_id": command_id, "route": route})
         self._queue.put(task)
@@ -89,13 +93,46 @@ class SpeechQueue:
             return {
                 "last_job_id": self._last_job_id,
                 "last_job_status": self._last_job_status,
+                "last_job_created_at": self._last_job_created_at,
+                "last_job_age_seconds": (
+                    time.perf_counter() - self._last_job_created_at
+                    if self._last_job_created_at is not None and self._last_job_status in {"queued", "started"}
+                    else 0
+                ),
                 "last_provider": self._last_provider or "text_only",
                 "last_error_type": self._last_error_type,
                 "last_error": self._last_error,
+                "last_played_at": self._last_played_at,
                 "last_result": last_result,
                 "queue_size": self._queue.qsize(),
+                "active_job_id": self._current_task.command_id if self._current_task else None,
                 "current_job_id": self._current_task.command_id if self._current_task else None,
             }
+
+    def reset(self) -> dict[str, Any]:
+        stop_all_audio()
+        self._cancel_event.set()
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()
+            except queue.Empty:
+                break
+        with self._lock:
+            self._current_task = None
+            self._last_job_status = "failed"
+            self._last_error_type = "queue_reset"
+            self._last_error = "TTS queue was reset by user request."
+            self._last_result = {
+                "ok": False,
+                "provider": self._last_provider or "text_only",
+                "status": "failed",
+                "error_type": "queue_reset",
+                "error": self._last_error,
+            }
+        self._cancel_event.clear()
+        event_bus.emit("tts.failed", {"status": "failed", "error_type": "queue_reset"})
+        return self.status()
 
     def _worker_loop(self) -> None:
         while True:
@@ -146,6 +183,8 @@ class SpeechQueue:
                     self._last_error_type = None
                     self._last_error = None
                     self._last_result = dict(result)
+                    if result.get("played"):
+                        self._last_played_at = time.time()
                 logger.info("[QUEUE] TTS task command_id=%s completed successfully in %sms", task.command_id, latency_ms)
                 event_bus.emit(
                     "tts.generated",

@@ -126,6 +126,9 @@ export function MinimalUI({
   const ttsProvider = state.lastResult?.tts?.provider;
   const invalidTtsProvider = ttsProvider === "none";
   const visibleTtsProvider = invalidTtsProvider ? "Backend вернул некорректный TTS provider none" : (ttsProvider ?? "text_only");
+  const ttsQueueStuck =
+    state.ttsStatus?.last_job_status === "queued" &&
+    Number(state.ttsStatus?.last_job_age_seconds ?? 0) > 10;
   const textOnlyFix =
     state.lastResult?.tts?.fix ||
     state.voiceProviderStatus?.fixes?.[0] ||
@@ -367,6 +370,19 @@ export function MinimalUI({
                         Голос Джарвиса недоступен. Тип: {(state.lastResult.tts as any)?.error_type ?? state.lastResult.tts?.status ?? state.voiceProviderStatus?.last_error_type ?? "unknown"}. Решение: {textOnlyFix}
                       </div>
                     )}
+
+                    {ttsQueueStuck && (
+                      <div style={{ color: "#FF5E5E", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px" }}>
+                        TTS job завис в очереди
+                        <button className="secondary-button" type="button" onClick={() => api.ttsReset().then(onRefresh)}>
+                          Сбросить TTS очередь
+                        </button>
+                      </div>
+                    )}
+
+                    {state.ttsStatus?.last_provider === "fish_audio" && state.ttsStatus?.last_job_status === "played" && (
+                      <div style={{ color: "#00FF66", fontWeight: 500 }}>Голос Джарвиса активен</div>
+                    )}
                   </div>
                 )}
 
@@ -525,6 +541,9 @@ function ControlPanel({
   } else if (listenerState === "error") {
     listenerStatusLabel = `Live listener заблокирован: ${listenerReason}`;
     statusColor = "#FF3333";
+  } else if (isBackendAvailable && settings?.listener_enabled && settings?.listener_autostart && !isRunning) {
+    listenerStatusLabel = `Live listener не стартовал: ${listenerReason}`;
+    statusColor = "#FF3333";
   }
   
   if (isBackendAvailable && state.voice?.stt?.configured === false) {
@@ -585,7 +604,7 @@ function ControlPanel({
 
       <ToggleRow label="Голосовое пробуждение" checked={Boolean(settings?.voice_wake_enabled)} onChange={handleToggleWakeWord} />
       <ToggleRow label="Хлопок" checked={Boolean(settings?.clap_enabled)} onChange={handleToggleClap} />
-      <ToggleRow label="Автозапуск" checked={Boolean(settings?.autostart_enabled)} onChange={(value) => onPatchSettings({ autostart_enabled: value })} />
+      <ToggleRow label="Автопрослушивание" checked={Boolean(settings?.listener_autostart ?? true)} onChange={(value) => onPatchSettings({ listener_autostart: value, listener_enabled: value })} />
       <label className="field-row">
         <span>Микрофон</span>
         <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)}>
@@ -600,6 +619,10 @@ function ControlPanel({
           })}
         </select>
       </label>
+      <button className="secondary-button" type="button" onClick={() => onPatchSettings({ listener_device_id: selectedDevice })}>
+        <Mic size={16} />
+        Сделать этот микрофон основным
+      </button>
       <label className="field-row">
         <span>Режим</span>
         <select value={runtimeMode} onChange={(event) => onPatchSettings({ runtime_mode: event.target.value as SettingsData["runtime_mode"] })}>

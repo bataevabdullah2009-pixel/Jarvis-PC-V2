@@ -165,6 +165,9 @@ class SettingsPatchRequest(BaseModel):
     clap_enabled: bool | None = None
     runtime_mode: str | None = None
     autostart_enabled: bool | None = None
+    listener_enabled: bool | None = None
+    listener_autostart: bool | None = None
+    listener_device_id: str | None = None
     voice_volume: int | None = Field(default=None, ge=0, le=100)
     offline_mode: bool | None = None
 
@@ -321,6 +324,11 @@ def voice_tts_status() -> dict[str, Any]:
     return envelope(data)
 
 
+@app.post("/voice/tts-reset")
+def voice_tts_reset() -> dict[str, Any]:
+    return envelope(speech_queue.reset())
+
+
 @app.get("/debug/voice-provider-status")
 def debug_voice_provider_status() -> dict[str, Any]:
     settings = get_settings()
@@ -335,6 +343,7 @@ def debug_voice_provider_status() -> dict[str, Any]:
         fixes.append("Добавьте JARVIS_FISH_AUDIO_API_KEY и JARVIS_FISH_AUDIO_VOICE_ID в backend/.env")
 
     last_state = last_tts_state()
+    queue_state = speech_queue.status()
     return envelope(
         {
             "env_loaded": bool(env_status.get("env_loaded")),
@@ -346,6 +355,11 @@ def debug_voice_provider_status() -> dict[str, Any]:
             "fish_key_present": fish_key_present,
             "fish_voice_id_present": fish_voice_present,
             "selected_provider": selected_provider,
+            "queue_size": queue_state["queue_size"],
+            "active_job_id": queue_state["active_job_id"],
+            "last_job_id": queue_state["last_job_id"],
+            "last_job_status": queue_state["last_job_status"] or "none",
+            "last_job_age_seconds": queue_state.get("last_job_age_seconds", 0),
             "last_provider": last_state["last_provider"],
             "last_error_type": last_state["last_error_type"],
             "last_error": last_state["last_error"],
@@ -616,7 +630,8 @@ def debug_ai_provider_status() -> dict[str, Any]:
 def debug_test_groq(request: ProviderTextRequest) -> dict[str, Any]:
     text = request.text or "Ответь одним словом: OK"
     required = "OK" if "OK" in text else None
-    return GroqPlanner(get_settings()).test(text, must_contain=required)
+    result = GroqPlanner(get_settings()).test(text, must_contain=required)
+    return envelope(result, ok=bool(result.get("ok")))
 
 
 @app.post("/debug/test-ai-brain")
@@ -1036,6 +1051,14 @@ def voice_listener_status() -> dict[str, Any]:
 
 @app.post("/voice/listener-start")
 def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
+    patch_settings(
+        {
+            "listener_enabled": True,
+            "listener_device_id": request.device_id,
+            "voice_wake_enabled": request.wake_word,
+            "clap_enabled": request.clap,
+        }
+    )
     gate_res = voice_listener.check_safe_start(request.device_id)
     if not gate_res["safe_to_start"]:
         error_payload = {
@@ -1066,6 +1089,7 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
 @app.post("/voice/listener-stop")
 def voice_listener_stop_post() -> dict[str, Any]:
     result = voice_listener.stop()
+    patch_settings({"listener_enabled": False})
     return make_listener_response(result.get("ok", True))
 
 
@@ -1077,8 +1101,7 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
     device_name = dev_res.get("device_name", "Unknown Device")
 
     if not dev_res["ok"]:
-        return {
-            "ok": False,
+        data = {
             "device_id": str(request.device_id),
             "device_name": device_name,
             "noise_floor_rms": 0.0,
@@ -1088,6 +1111,7 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
             "recommended_min_rms_threshold": 0.003,
             "fixes": [dev_res.get("fix", "Selected device not found.")]
         }
+        return envelope(data, ok=False, error={"code": "MIC_DEVICE_NOT_FOUND", "message": data["fixes"][0], "details": data})
 
     try:
         silence_capture = capture_audio(
@@ -1114,8 +1138,7 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
         if not heard_signal:
             fixes.append("Увеличьте чувствительность микрофона в настройках Windows или выберите другое устройство.")
 
-        res = {
-            "ok": True,
+        data = {
             "device_id": str(request.device_id),
             "device_name": device_name,
             "noise_floor_rms": noise_floor_rms,
@@ -1125,10 +1148,9 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
             "recommended_min_rms_threshold": recommended,
             "fixes": fixes
         }
-        return res
+        return envelope(data, ok=heard_signal, error=None if heard_signal else {"code": "MICROPHONE_NO_AUDIO", "message": "Микрофон выбран, но сигнал не слышен.", "details": data})
     except Exception as exc:
-        return {
-            "ok": False,
+        data = {
             "device_id": str(request.device_id),
             "device_name": device_name,
             "noise_floor_rms": 0.0,
@@ -1136,8 +1158,9 @@ def voice_calibrate_mic(request: CalibrateMicRequest) -> dict[str, Any]:
             "speech_peak": 0.0,
             "heard_signal": False,
             "recommended_min_rms_threshold": 0.003,
-            "fixes": [f"РћС€РёР±РєР° РєР°Р»РёР±СЂРѕРІРєРё: {exc}"]
+            "fixes": [f"Ошибка калибровки: {exc}"]
         }
+        return envelope(data, ok=False, error={"code": "MIC_CALIBRATION_FAILED", "message": str(exc), "details": data})
 
 
 @app.post("/voice/start-listener")
@@ -1148,6 +1171,7 @@ def voice_start_listener(request: ListenerStartRequest) -> dict[str, Any]:
 @app.post("/voice/stop-listener")
 def voice_stop_listener() -> dict[str, Any]:
     result = voice_listener.stop()
+    patch_settings({"listener_enabled": False})
     event_bus.emit("voice.listener.stopped", result.get("data", {}))
     return make_listener_response(result.get("ok", True))
 

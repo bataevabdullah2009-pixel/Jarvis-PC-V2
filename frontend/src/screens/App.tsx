@@ -382,7 +382,7 @@ export function App() {
     const devId = deviceId ?? localStorage.getItem("selected_device_id") ?? "default";
     playSound("listening");
     setState((current) => ({ ...current, assistantStatus: "listening", statusText: "Слушаю 3 секунды...", lastError: null }));
-    const response = await api.testMicrophone(devId);
+    const response = await api.calibrateMic(devId);
     if (!response.ok || !response.data) {
       setState((current) => ({
         ...current,
@@ -399,8 +399,16 @@ export function App() {
       ...current,
       assistantStatus: data.heard_signal ? "ready" : "error",
       statusText: data.heard_signal ? "Готов" : "Ошибка",
-      lastMicrophoneTest: data,
-      lastError: data.heard_signal ? null : `Сигнал слишком тихий. RMS ${data.rms.toFixed(5)}. Проверьте выбранный микрофон.`
+      lastMicrophoneTest: {
+        device_id: data.device_id,
+        duration_seconds: 5,
+        sample_rate: 16000,
+        channels: 1,
+        rms: data.speech_rms,
+        peak: data.speech_peak,
+        heard_signal: data.heard_signal
+      },
+      lastError: data.heard_signal ? null : `Микрофон выбран, но сигнал не слышен. RMS ${data.speech_rms.toFixed(5)}, Peak ${data.speech_peak.toFixed(5)}.`
     }));
     playSound(data.heard_signal ? "success" : "error");
   };
@@ -489,11 +497,25 @@ export function App() {
 
   const patchSettings = async (patch: Partial<SettingsData>) => {
     const response = await api.patchSettings(patch);
+    const [settingsRefresh, aiStatusRefresh, listenerRefresh] = await Promise.all([
+      api.settings(),
+      api.aiProviderStatus(),
+      api.listenerStatus()
+    ]);
+    const providerMismatch =
+      (patch.ai_primary && settingsRefresh.data?.ai_primary !== patch.ai_primary) ||
+      (patch.ai_fallback && settingsRefresh.data?.ai_fallback !== patch.ai_fallback);
     setState((current) => ({
       ...current,
-      settings: response.ok ? response.data : current.settings,
-      debugMode: response.ok ? Boolean(response.data?.debug_mode) : current.debugMode,
-      lastError: response.ok ? current.lastError : normalErrorMessage(response.error, "Backend недоступен")
+      settings: settingsRefresh.ok ? settingsRefresh.data : response.ok ? response.data : current.settings,
+      aiProviderStatus: aiStatusRefresh.ok ? aiStatusRefresh.data : current.aiProviderStatus,
+      listenerStatus: listenerRefresh.ok ? listenerRefresh.data : current.listenerStatus,
+      debugMode: settingsRefresh.ok ? Boolean(settingsRefresh.data?.debug_mode) : response.ok ? Boolean(response.data?.debug_mode) : current.debugMode,
+      lastError: providerMismatch
+        ? "Backend вернул другое значение AI provider после сохранения настроек."
+        : response.ok
+          ? current.lastError
+          : normalErrorMessage(response.error, "Backend недоступен")
     }));
   };
 

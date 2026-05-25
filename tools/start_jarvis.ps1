@@ -194,17 +194,6 @@ $env:JARVIS_BACKEND_PORT = [string]$backendPort
 $env:JARVIS_FRONTEND_URL = "http://127.0.0.1:$frontendPort"
 $env:JARVIS_FRONTEND_MODE = "dev"
 $env:JARVIS_LAUNCHER = "START_JARVIS"
-$env:JARVIS_AI_PRIMARY = if ($env:JARVIS_AI_PRIMARY) { $env:JARVIS_AI_PRIMARY } else { "groq" }
-$env:JARVIS_AI_FALLBACK = if ($env:JARVIS_AI_FALLBACK) { $env:JARVIS_AI_FALLBACK } else { "openrouter" }
-$env:JARVIS_AI_ALLOW_LOCAL_FALLBACK = if ($env:JARVIS_AI_ALLOW_LOCAL_FALLBACK) { $env:JARVIS_AI_ALLOW_LOCAL_FALLBACK } else { "true" }
-$env:JARVIS_LISTENER_ENABLED = "true"
-$env:JARVIS_LISTENER_AUTOSTART = "true"
-$env:JARVIS_WAKE_WORDS = "джарвис,чарли,jarvis"
-$env:JARVIS_COMMAND_RECORD_SECONDS = "6"
-$env:JARVIS_COOLDOWN_MS = "2500"
-$env:JARVIS_IGNORE_SELF_AUDIO = "true"
-$env:JARVIS_CLAP_THRESHOLD = "0.25"
-$env:JARVIS_MIN_RMS_THRESHOLD = "0.003"
 $env:VITE_JARVIS_API_BASE = "http://127.0.0.1:$backendPort"
 
 try {
