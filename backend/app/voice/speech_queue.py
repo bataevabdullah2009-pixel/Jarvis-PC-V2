@@ -288,7 +288,7 @@ class SpeechQueue:
                     {
                         "command_id": task.command_id,
                         "route": task.route,
-                        "provider": result.get("provider"),
+                        "provider": result.get("provider") or "text_only",
                         "status": result.get("status"),
                         "played": False,
                         "error": error_message,
@@ -329,7 +329,7 @@ class SpeechQueue:
                 {
                     "command_id": task.command_id,
                     "route": task.route,
-                    "provider": "unknown",
+                    "provider": "text_only",
                     "status": "failed",
                     "played": False,
                     "error": str(e),

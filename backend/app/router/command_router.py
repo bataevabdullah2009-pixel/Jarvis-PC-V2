@@ -244,11 +244,14 @@ class CommandRouter:
             self._local_matched = True
             intent_ms = int((time.perf_counter() - intent_started) * 1000)
             
-            action_type = str(local_command.get("action", "")).strip()
-            value = str(local_command.get("value", "")).strip()
+            action_type = str(local_command.get("action_type") or local_command.get("action") or "").strip()
+            value = str(local_command.get("action_value") or local_command.get("value") or "").strip()
             action = {"type": action_type, "target": value}
             
-            status, reason = ActionPolicy.classify_action(action)
+            if bool(local_command.get("confirm_required")):
+                status, reason = "CONFIRM_REQUIRED", "command requires user confirmation"
+            else:
+                status, reason = ActionPolicy.classify_action(action)
             if status == "FORBIDDEN":
                 return self._finalize(
                     command_id=command_id,
@@ -450,6 +453,8 @@ class CommandRouter:
 
     def _match_local_command(self, normalized_text: str) -> dict[str, Any] | None:
         for command in get_commands().get("commands", []):
+            if command.get("enabled") is False:
+                continue
             phrases = command.get("phrases") or command.get("triggers") or []
             normalized_phrases = {normalize_text(str(phrase)) for phrase in phrases}
             if normalized_text in normalized_phrases or any(phrase and phrase in normalized_text for phrase in normalized_phrases):
@@ -457,8 +462,8 @@ class CommandRouter:
         return None
 
     def _run_local_command(self, command: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-        action_type = str(command.get("action", "")).strip()
-        value = str(command.get("value", "")).strip()
+        action_type = str(command.get("action_type") or command.get("action") or "").strip()
+        value = str(command.get("action_value") or command.get("value") or "").strip()
 
         if action_type == "open_app":
             opened = open_app(value, self.settings, dry_run=dry_run)
@@ -476,8 +481,14 @@ class CommandRouter:
             result = news.run(self.settings, dry_run=dry_run)
             return {"response_text": result["response_text"], "actions": result.get("actions", [])}
 
-        if action_type == "respond_text":
+        if action_type in {"respond_text", "speak"}:
             return {"response_text": value or "Привет, сэр. Я на связи.", "actions": []}
+
+        if action_type == "run_shell":
+            return {
+                "response_text": "Сэр, shell-команда требует подтверждения перед выполнением.",
+                "actions": [{"type": "run_shell", "target": value, "status": "requires_confirmation"}],
+            }
 
         if action_type == "scenario":
             result = self._run_scenario(value, dry_run=dry_run)

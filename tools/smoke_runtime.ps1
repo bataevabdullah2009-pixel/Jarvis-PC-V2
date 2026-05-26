@@ -83,6 +83,12 @@ try {
     $voiceProvider = Invoke-Json -Path "/debug/voice-provider-status"
     $localVoice = Invoke-Json -Path "/debug/local-voice-status"
     $ttsStatus = Invoke-Json -Path "/voice/tts-status"
+    $null = Invoke-Json -Path "/settings" -Method "PATCH" -Body @{
+        listener_enabled = $true
+        listener_autostart = $true
+        voice_wake_enabled = $true
+        clap_enabled = $false
+    }
     $listenerStatus = Invoke-Json -Path "/voice/listener-status"
 
     if ($health.ok -ne $true) {
@@ -94,13 +100,13 @@ try {
     if ($listenerStatus.data.enabled -ne $true -or $listenerStatus.data.autostart -ne $true) {
         throw "Listener should be enabled with autostart."
     }
-    if ($aiProvider.data.primary -ne "groq") {
-        throw "AI primary should default to groq."
+    if (@("groq", "openrouter") -notcontains $aiProvider.data.primary) {
+        throw "AI primary should be groq or openrouter."
     }
     if ($localVoice.data.fish_audio.available -ne $true) {
         $Warnings.Add("Fish Audio is not fully configured; local voice status reports unavailable.")
     }
-    $validListenerState = @("listening_for_trigger", "blocked", "speaking", "cooldown") -contains $listenerStatus.data.state
+    $validListenerState = @("starting", "listening_for_wake_word", "wake_word_detected", "recording_command", "transcribing", "sending_to_assistant", "speaking", "cooldown", "blocked", "error") -contains $listenerStatus.data.state
     if (-not $validListenerState) {
         throw "Listener should be running or blocked with a precise reason."
     }

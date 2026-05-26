@@ -22,7 +22,7 @@ from app.providers.fish_audio import FishAudioTTS
 from app.providers.groq import GroqPlanner
 from app.providers.openrouter import OpenRouterPlanner
 from app.scenarios import music, news, welcome_home, workspace
-from app.storage.command_store import get_commands
+from app.storage.command_store import create_command, delete_command, get_commands, update_command
 from app.voice.microphone import VoiceDependencyError
 from app.voice.tts import TTSService
 from app.voice.speech_orchestrator import last_tts_state
@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI):
     if settings.listener_enabled and settings.listener_autostart:
         try:
             logger.info("Listener autostart enabled. Verifying safe-start gates before starting voice listener...")
+            voice_listener.device_id = settings.listener_device_id
             gate_res = voice_listener.check_safe_start(settings.listener_device_id)
             if gate_res["safe_to_start"]:
                 voice_listener.start(
@@ -77,7 +78,7 @@ async def lifespan(app: FastAPI):
                 )
         except Exception as e:
             logger.exception("Failed to start voice_listener on startup: %s", e)
-            voice_listener.block("listener_autostart_error", "Проверьте микрофон, STT и зависимости voice runtime.", str(e))
+            voice_listener.block("unknown_exception", "Проверьте микрофон, STT и зависимости voice runtime.", str(e))
     else:
         logger.info("Voice listener auto-start is disabled.")
 
@@ -133,6 +134,24 @@ class CommandRequest(BaseModel):
     text: str = Field(..., min_length=1)
     source: str = "manual"
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+class CustomCommandRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    phrases: list[str] = Field(default_factory=list)
+    action_type: str = Field(..., min_length=1)
+    action_value: str = ""
+    enabled: bool = True
+    confirm_required: bool | None = None
+
+
+class CustomCommandPatchRequest(BaseModel):
+    title: str | None = None
+    phrases: list[str] | None = None
+    action_type: str | None = None
+    action_value: str | None = None
+    enabled: bool | None = None
+    confirm_required: bool | None = None
 
 
 class AskRequest(BaseModel):
@@ -396,6 +415,7 @@ def debug_local_voice_status() -> dict[str, Any]:
             "xtts_local": XTTSLocalProvider(settings).status().to_dict(),
             "gpt_sovits_local": GPTSoVITSLocalProvider(settings).status().to_dict(),
             "rvc_converter": RVCConverterProvider(settings).status().to_dict(),
+            "text_only": {"enabled": True, "available": True, "install_hint": None},
         }
     )
 
@@ -1041,6 +1061,7 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
             "clap_enabled": False,
         }
     )
+    voice_listener.device_id = request.device_id
     gate_res = voice_listener.check_safe_start(request.device_id)
     if not gate_res["safe_to_start"]:
         error_payload = {
@@ -1327,6 +1348,28 @@ def settings_patch(request: SettingsPatchRequest) -> dict[str, Any]:
 @app.get("/commands")
 def commands() -> dict[str, Any]:
     return envelope(get_commands())
+
+
+@app.post("/commands")
+def commands_create(request: CustomCommandRequest) -> dict[str, Any]:
+    command = create_command(request.model_dump(exclude_none=True))
+    return envelope(command)
+
+
+@app.patch("/commands/{command_id}")
+def commands_update(command_id: str, request: CustomCommandPatchRequest) -> dict[str, Any]:
+    updated = update_command(command_id, request.model_dump(exclude_none=True))
+    if not updated:
+        return envelope(None, ok=False, error={"code": "COMMAND_NOT_FOUND", "message": "Command not found.", "details": {"command_id": command_id}})
+    return envelope(updated)
+
+
+@app.delete("/commands/{command_id}")
+def commands_delete(command_id: str) -> dict[str, Any]:
+    deleted = delete_command(command_id)
+    if not deleted:
+        return envelope(None, ok=False, error={"code": "COMMAND_NOT_FOUND", "message": "Command not found.", "details": {"command_id": command_id}})
+    return envelope({"deleted": True, "command_id": command_id})
 
 
 @app.get("/diagnostics/full-test")

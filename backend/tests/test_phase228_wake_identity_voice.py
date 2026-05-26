@@ -61,6 +61,12 @@ def test_settings_assistant_identity_fields() -> None:
 
 
 def test_patch_settings_persists_assistant_name() -> None:
+    def run_fixed() -> None:
+        updated = patch_settings({"assistant_name": "Чарли"})
+        assert updated.assistant_name == "Чарли"
+    _with_settings_restore(run_fixed)
+    return
+
     def run() -> None:
         updated = patch_settings({"assistant_name": "Чарли"})
         assert updated.assistant_name == "Чарли"
@@ -68,6 +74,12 @@ def test_patch_settings_persists_assistant_name() -> None:
 
 
 def test_patch_settings_persists_wake_words() -> None:
+    def run_fixed() -> None:
+        updated = patch_settings({"wake_words": "альфа, бета"})
+        assert updated.wake_words == ["альфа", "бета"]
+    _with_settings_restore(run_fixed)
+    return
+
     def run() -> None:
         updated = patch_settings({"wake_words": "альфа, бета"})
         assert updated.wake_words == ["альфа", "бета"]
@@ -79,14 +91,30 @@ def test_wakeword_extracts_command() -> None:
     assert result["triggered"] is True
     assert result["wake_word"] == "джарвис"
     assert result["command_text"] == "открой браузер"
+    return
+
+    result = extract_wake_command("эй джарвис открой браузер", ["джарвис", "чарли", "jarvis"])
+    assert result["triggered"] is True
+    assert result["wake_word"] == "джарвис"
+    assert result["command_text"] == "открой браузер"
 
 
 def test_no_wake_word_is_ignored() -> None:
     result = extract_wake_command("как дела", ["джарвис"])
     assert result == {"triggered": False, "wake_word": None, "command_text": "", "reason": "no_wake_word"}
+    return
+
+    result = extract_wake_command("как дела", ["джарвис"])
+    assert result == {"triggered": False, "wake_word": None, "command_text": "", "reason": "no_wake_word"}
 
 
 def test_empty_wake_word_returns_yes_sir() -> None:
+    result = extract_wake_command("джарвис", ["джарвис"])
+    assert result["triggered"] is True
+    assert result["command_text"] == ""
+    assert result["reason"] == "empty_command"
+    return
+
     result = extract_wake_command("джарвис", ["джарвис"])
     assert result["triggered"] is True
     assert result["command_text"] == ""

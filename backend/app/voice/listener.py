@@ -70,6 +70,7 @@ class VoiceListener:
             "no_audio_events": 0,
             "self_echo_blocks": 0,
             "cooldown_blocks": 0,
+            "stops_without_reason": 0,
         }
 
         self._thread: threading.Thread | None = None
@@ -93,7 +94,18 @@ class VoiceListener:
         backend_alive = True
 
         # 2. Selected device exists
-        dev_res = resolve_input_device(device_id)
+        try:
+            dev_res = resolve_input_device(device_id)
+        except Exception as exc:
+            message = str(exc)
+            permission_markers = ("permission", "access", "denied", "privacy", "разреш")
+            error_type = "microphone_permission_denied" if any(marker in message.lower() for marker in permission_markers) else "device_not_found"
+            return {
+                "safe_to_start": False,
+                "failed_check": error_type,
+                "fix": "Разрешите доступ к микрофону в настройках Windows и выберите рабочее устройство.",
+                "checks": {"backend_alive": backend_alive, "device_exists": False},
+            }
         device_exists = bool(dev_res.get("ok", False))
 
         # 3. Microphone test (heard_signal = True)
@@ -135,6 +147,35 @@ class VoiceListener:
         safe_to_start = all(checks.values())
         failed_check = None
         fix = None
+
+        if not safe_to_start:
+            if not device_exists:
+                failed_check = "device_not_found"
+                fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
+            elif not microphone_ok:
+                failed_check = "microphone_no_audio"
+                fix = "Микрофон выбран, но сигнал не слышен. Проверьте чувствительность Windows, разрешение микрофона и выбранное устройство."
+            elif not stt_configured:
+                offline = stt_conf.get("offline", {}) if isinstance(stt_conf, dict) else {}
+                if offline.get("vosk_available") and not offline.get("model_configured"):
+                    failed_check = "vosk_model_missing"
+                    fix = "Укажите JARVIS_VOSK_MODEL_PATH на распакованную Vosk-модель."
+                else:
+                    failed_check = "stt_not_configured"
+                    fix = "Установите Vosk и укажите путь к модели через JARVIS_VOSK_MODEL_PATH."
+            elif not no_current_tts_speaking:
+                failed_check = "anti_echo_locked"
+                fix = "Подождите, пока ассистент договорит, затем listener сам вернется к прослушиванию."
+            elif not no_other_listener_running:
+                failed_check = "already_running"
+                fix = "Listener уже запущен."
+
+            return {
+                "safe_to_start": False,
+                "failed_check": failed_check,
+                "fix": fix,
+                "checks": checks
+            }
 
         if not safe_to_start:
             if not device_exists:
@@ -296,11 +337,28 @@ class VoiceListener:
         elif settings.listener_enabled and settings.listener_autostart and not running:
             display_state = "blocked"
             if not self.last_error_type:
-                self.last_error_type = gate_res["failed_check"] or "listener_exception"
+                self._inc_metric("stops_without_reason")
+                self.last_error_type = gate_res["failed_check"] or "listener_thread_crashed"
                 self.last_error = self.last_error or "Listener is enabled but no background worker is running."
                 self.fix = self.fix or gate_res["fix"] or "Restart the listener from UI or POST /voice/listener-start."
 
         reason = None if settings.listener_enabled else "listener_disabled"
+        status_device_id = str(self.device_id or settings.listener_device_id)
+        if status_device_id == "default" and settings.listener_device_id:
+            status_device_id = str(settings.listener_device_id)
+        metric_keys = (
+            "audio_windows",
+            "transcripts",
+            "wake_triggers",
+            "ignored_no_wake_word",
+            "commands_sent",
+            "ignored_self_audio",
+            "no_audio_events",
+            "stops_without_reason",
+            "self_echo_blocks",
+            "cooldown_blocks",
+        )
+        metrics = {key: int(self.metrics.get(key, 0)) for key in metric_keys}
 
         return {
             "ok": True,
@@ -311,7 +369,7 @@ class VoiceListener:
                 "state": display_state,
                 "assistant_name": settings.assistant_name,
                 "wake_words": list(settings.wake_words),
-                "device_id": str(self.device_id),
+                "device_id": status_device_id,
                 "device_name": self.device_name,
                 "wake_word_enabled": self.wake_word_enabled,
                 "clap_enabled": self.clap_enabled,
@@ -320,12 +378,12 @@ class VoiceListener:
                 "last_heard_text": self.last_heard_text,
                 "last_wake_word": self.last_wake_word,
                 "last_command_text": self.last_command_text,
-                "last_ignored_reason": self.last_ignored_reason,
+                "last_ignored_reason": self.last_ignored_reason or None,
                 "speaking": is_speaking_now(),
                 "cooldown_until": datetime.fromtimestamp(self.cooldown_until).isoformat() if self.cooldown_until > 0 else None,
                 "errors": list(self.errors),
                 "warnings": list(self.warnings),
-                "metrics": dict(self.metrics),
+                "metrics": metrics,
                 "reason": reason,
                 "safe_to_start": gate_res["safe_to_start"],
                 "failed_check": gate_res["failed_check"],
@@ -421,7 +479,7 @@ class VoiceListener:
 
         # Check silent inputs
         if capture.rms < settings.min_rms_threshold:
-            self.metrics["no_audio_events"] += 1
+            self._inc_metric("no_audio_events")
             return
 
         # Run trigger detection
@@ -552,6 +610,7 @@ class VoiceListener:
 
         logger.info("[LISTENER] Command transcript received: '%s'", transcript)
         self.last_transcript = transcript
+        self.last_heard_text = transcript
 
         # Anti-echo guard checks
         guard_res = should_ignore_transcript(transcript)
@@ -559,7 +618,7 @@ class VoiceListener:
             logger.warning("[LISTENER] Transcript ignored. Reason: %s", guard_res["reason"])
             self.last_ignored_reason = guard_res["reason"] or "echo"
             if guard_res["self_echo_blocked"]:
-                self.metrics["ignored_self_audio"] += 1
+                self._inc_metric("ignored_self_audio")
 
             if guard_res["stop_listener"]:
                 self.state = "blocked"
@@ -573,7 +632,21 @@ class VoiceListener:
                 self.enter_cooldown("ignored_echo")
             return
 
-        self.send_to_assistant(transcript)
+        wake = extract_wake_command(str(transcript), list(settings.wake_words))
+        self.last_ignored_reason = wake["reason"]
+        if not wake["triggered"]:
+            self._inc_metric("ignored_no_wake_word")
+            self.state = "listening_for_wake_word"
+            event_bus.emit("voice.listener.state", {"state": self.state})
+            return
+
+        self.last_wake_word = wake["wake_word"] or ""
+        self.last_command_text = wake["command_text"]
+        if not self.last_command_text:
+            self.acknowledge_empty_wake()
+            return
+
+        self.send_to_assistant(self.last_command_text)
 
     def send_to_assistant(self, transcript: str) -> None:
         """Submits the transcribed text command to the assistant orchestrator."""
@@ -589,7 +662,7 @@ class VoiceListener:
         orchestrator = AssistantOrchestrator(settings)
 
         logger.info("[LISTENER] Submitting command to AssistantOrchestrator: '%s'", transcript)
-        self.metrics["commands_sent"] += 1
+        self._inc_metric("commands_sent")
 
         # Run async ask() method inside background thread synchronously
         try:

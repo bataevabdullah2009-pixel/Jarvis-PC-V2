@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { CSSProperties, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { AppState, Screen } from "./App";
-import { SettingsData, api } from "../api/client";
+import { CommandPayload, SettingsData, api } from "../api/client";
 import {
   accentPresets,
   defaultLocalSettings,
@@ -430,7 +430,7 @@ export function MinimalUI({
          {state.screen === "scenarios" && (
            <ScenariosPanel settings={localSettings} onChange={updateLocal} onScenario={onScenario} savedText={savedText} />
          )}
-         {state.screen === "myCommands" && <MyCommandsPanel state={state} />}
+         {state.screen === "myCommands" && <MyCommandsCrudPanel state={state} onRefresh={onRefresh} />}
          {state.screen === "voices" && (
            <VoicesPanel
              state={state}
@@ -548,7 +548,7 @@ function ControlPanel({
     listenerStatusLabel = `Автослушание заблокировано: ${listenerReason}`;
     statusColor = "#FF3333";
   } else if (isBackendAvailable && settings?.listener_enabled && settings?.listener_autostart && !isRunning) {
-    listenerStatusLabel = "BUG: listener stopped without reason";
+    listenerStatusLabel = `Автослушание заблокировано: ${listenerReason}`;
     statusColor = "#FF3333";
   }
   
@@ -558,11 +558,12 @@ function ControlPanel({
   }
 
   const handleToggleAutolisten = async (value: boolean) => {
-    await onPatchSettings({ listener_enabled: value, listener_autostart: value, voice_wake_enabled: value, clap_enabled: false });
     if (value) {
+      await onPatchSettings({ listener_enabled: true, listener_autostart: true, voice_wake_enabled: true, clap_enabled: false });
       await api.listenerStart(selectedDevice, true, false);
     } else {
       await api.listenerStop();
+      await onPatchSettings({ listener_enabled: false, listener_autostart: false, voice_wake_enabled: false, clap_enabled: false });
     }
     setTimeout(onRefresh, 300);
   };
@@ -684,6 +685,155 @@ function CommandsPanel({ state }: { state: AppState }) {
             <div>
               <strong>{command.name ?? command.id}</strong>
               <p>{(command.phrases ?? command.triggers ?? []).join(", ")}</p>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MyCommandsCrudPanel({ state, onRefresh }: { state: AppState; onRefresh: Props["onRefresh"] }) {
+  const emptyDraft: CommandPayload = {
+    title: "",
+    phrases: [],
+    action_type: "open_app",
+    action_value: "",
+    enabled: true,
+    confirm_required: false
+  };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<CommandPayload>(emptyDraft);
+  const [phrasesText, setPhrasesText] = useState("");
+  const [message, setMessage] = useState("");
+
+  const resetForm = () => {
+    setDraft(emptyDraft);
+    setPhrasesText("");
+    setEditingId(null);
+    setIsEditing(false);
+  };
+
+  const saveCommand = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const phrases = phrasesText
+      .split(/[\n,]+/)
+      .map((phrase) => phrase.trim())
+      .filter(Boolean);
+    const payload = {
+      ...draft,
+      title: draft.title.trim(),
+      phrases,
+      action_value: draft.action_value.trim(),
+      confirm_required: draft.action_type === "run_shell" ? true : Boolean(draft.confirm_required)
+    };
+    if (!payload.title || payload.phrases.length === 0 || !payload.action_type) {
+      setMessage("Заполните название, фразы и действие.");
+      return;
+    }
+    if (editingId) {
+      await api.updateCommand(editingId, payload);
+      setMessage("Команда обновлена.");
+    } else {
+      await api.createCommand(payload);
+      setMessage("Команда добавлена.");
+    }
+    resetForm();
+    await onRefresh();
+  };
+
+  const editCommand = (command: AppState["commands"][number]) => {
+    setEditingId(command.id);
+    setIsEditing(true);
+    setDraft({
+      title: command.title || command.name || command.id,
+      phrases: command.phrases || command.triggers || [],
+      action_type: command.action_type || (typeof command.action === "string" ? command.action : command.action?.type) || "open_app",
+      action_value: command.action_value || command.value || (typeof command.action === "object" ? command.action.target || command.action.value || "" : ""),
+      enabled: command.enabled !== false,
+      confirm_required: Boolean(command.confirm_required ?? command.confirmation_required)
+    });
+    setPhrasesText((command.phrases || command.triggers || []).join(", "));
+  };
+
+  const deleteCommand = async (commandId: string) => {
+    await api.deleteCommand(commandId);
+    setMessage("Команда удалена.");
+    await onRefresh();
+  };
+
+  return (
+    <section className="panel page-panel">
+      <div className="panel-heading split">
+        <div className="panel-heading no-margin">
+          <Bot size={18} />
+          <h2>Мои команды</h2>
+        </div>
+        <button className="small-button" type="button" onClick={() => setIsEditing(true)}>
+          <Plus size={16} />
+          Добавить команду
+        </button>
+      </div>
+      {message && <p className="save-state">{message}</p>}
+      {isEditing && (
+        <form className="settings-grid" onSubmit={saveCommand}>
+          <label className="field-row">
+            <span>Название</span>
+            <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Открыть Telegram" />
+          </label>
+          <label className="field-row">
+            <span>Фразы через запятую</span>
+            <textarea value={phrasesText} onChange={(event) => setPhrasesText(event.target.value)} placeholder="открой телеграм, запусти telegram" />
+          </label>
+          <label className="field-row">
+            <span>Тип действия</span>
+            <select value={draft.action_type} onChange={(event) => setDraft({ ...draft, action_type: event.target.value })}>
+              <option value="open_app">open_app</option>
+              <option value="open_url">open_url</option>
+              <option value="open_file">open_file</option>
+              <option value="scenario">scenario</option>
+              <option value="speak">speak</option>
+              <option value="run_shell">run_shell</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Значение</span>
+            <input value={draft.action_value} onChange={(event) => setDraft({ ...draft, action_value: event.target.value })} placeholder="telegram.exe" />
+          </label>
+          <ToggleRow label="Включена" checked={draft.enabled !== false} onChange={(value) => setDraft({ ...draft, enabled: value })} />
+          <ToggleRow
+            label="Требовать подтверждение"
+            checked={draft.action_type === "run_shell" || Boolean(draft.confirm_required)}
+            onChange={(value) => setDraft({ ...draft, confirm_required: value })}
+          />
+          <div className="button-row">
+            <button className="wide-button" type="submit">
+              <Save size={17} />
+              Сохранить команду
+            </button>
+            <button className="secondary-button" type="button" onClick={resetForm}>
+              Отмена
+            </button>
+          </div>
+        </form>
+      )}
+      <div className="command-list">
+        {state.commands.slice(0, 12).map((command) => (
+          <article key={command.id}>
+            <Command size={17} />
+            <div>
+              <strong>{command.title ?? command.name ?? command.id}</strong>
+              <p>{(command.phrases ?? command.triggers ?? []).join(", ") || "Фразы не заданы"}</p>
+              <p>{command.action_type ?? (typeof command.action === "string" ? command.action : command.action?.type)}: {command.action_value ?? command.value}</p>
+            </div>
+            <div className="button-row">
+              <button className="icon-button" type="button" title="Редактировать" onClick={() => editCommand(command)}>
+                <Settings size={15} />
+              </button>
+              <button className="icon-button danger" type="button" title="Удалить" onClick={() => deleteCommand(command.id)}>
+                <Trash2 size={15} />
+              </button>
             </div>
           </article>
         ))}
@@ -940,6 +1090,29 @@ function VoicesPanel({
   const profiles = state.settings?.voice_profiles ?? [];
   const selectedProfileId = state.settings?.voice_profile_id ?? profiles[0]?.id ?? "jarvis_main";
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0];
+  const [localVoiceStatus, setLocalVoiceStatus] = useState<Record<string, any> | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    api.localVoiceStatus().then((result) => {
+      if (mounted && result.ok) setLocalVoiceStatus(result.data as Record<string, any>);
+    }).catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, [selectedProfile?.provider]);
+  const selectedProviderStatus = localVoiceStatus?.[selectedProfile?.provider || "fish_audio"];
+  const providerStatusText = selectedProviderStatus?.available
+    ? "configured"
+    : selectedProviderStatus?.enabled === false
+      ? "disabled"
+      : selectedProviderStatus
+        ? "unavailable"
+        : "not installed";
+  const providerHint = selectedProfile?.provider === "piper_local" && providerStatusText !== "configured"
+    ? "Piper не установлен. Запустите tools/voice_engines/install_piper.ps1."
+    : selectedProfile?.provider === "gpt_sovits_local" && providerStatusText !== "configured"
+      ? "GPT-SoVITS сервер не запущен. Откройте docs/local_voice_engines.md."
+      : selectedProviderStatus?.fix || selectedProviderStatus?.install_hint || "";
   const maskVoiceId = (value?: string) => {
     const text = value || "";
     if (!text) return "";
@@ -980,7 +1153,17 @@ function VoicesPanel({
         <InfoCard label="STT" value={state.voice?.stt.provider ?? "not configured"} />
         <InfoCard label="TTS" value={state.ttsStatus?.primary ?? state.voice?.tts.mode ?? "text only"} />
         <InfoCard label="Jarvis voice" value={state.settings?.fish_audio_voice_configured ? "Fish Audio voice id" : "Fish Audio unavailable"} />
+        <InfoCard label="Selected provider" value={providerStatusText} />
+        {state.lastMicrophoneTest && (
+          <InfoCard
+            label="Mic RMS/Peak"
+            value={`${state.lastMicrophoneTest.rms.toFixed(5)} / ${state.lastMicrophoneTest.peak.toFixed(5)} / heard=${state.lastMicrophoneTest.heard_signal ? "true" : "false"}`}
+          />
+        )}
       </div>
+      {state.lastMicrophoneTest && !state.lastMicrophoneTest.heard_signal && (
+        <p className="save-state">Микрофон выбран, но сигнал не слышен.</p>
+      )}
       <form className="settings-section" onSubmit={saveVoiceProfile}>
         <div className="panel-heading no-margin">
           <Volume2 size={18} />
@@ -1013,6 +1196,8 @@ function VoicesPanel({
           <span>voice_id</span>
           <input name="voice_id" defaultValue={maskVoiceId(selectedProfile?.voice_id_masked || selectedProfile?.voice_id)} />
         </label>
+        {providerHint && <p className="save-state">{providerHint}</p>}
+        <p className="save-state">Проверить выбранный голос · Открыть инструкцию локальных голосов</p>
         <label className="field-row">
           <span>tone</span>
           <select name="tone" defaultValue={selectedProfile?.tone ?? state.settings?.voice_tone ?? "calm"}>

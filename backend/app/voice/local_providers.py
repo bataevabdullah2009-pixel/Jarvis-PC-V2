@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from app.core.config import Settings
+from app.providers.gpt_sovits_local import GPTSoVITSLocalTTS
+from app.providers.piper_local import PiperLocalTTS
 
 
 @dataclass(slots=True)
@@ -25,16 +26,12 @@ class PiperLocalProvider:
         self.settings = settings
 
     def status(self) -> VoiceProviderStatus:
-        model_exists = Path(self.settings.piper_model_path).exists()
+        status = PiperLocalTTS(self.settings).status()
         return VoiceProviderStatus(
             name=self.name,
-            enabled=self.settings.piper_enabled,
-            available=self.settings.piper_enabled and model_exists,
-            details={
-                "model_path": self.settings.piper_model_path,
-                "model_exists": model_exists,
-                "install_hint": "pip install piper-tts",
-            },
+            enabled=bool(status.get("enabled")),
+            available=bool(status.get("available")),
+            details={key: value for key, value in status.items() if key not in {"enabled", "available"}},
         )
 
 
@@ -60,11 +57,12 @@ class GPTSoVITSLocalProvider:
         self.settings = settings
 
     def status(self) -> VoiceProviderStatus:
+        status = GPTSoVITSLocalTTS(self.settings).status()
         return VoiceProviderStatus(
             name=self.name,
-            enabled=self.settings.gpt_sovits_enabled,
-            available=False,
-            details={"api_url": self.settings.gpt_sovits_api_url},
+            enabled=bool(status.get("enabled")),
+            available=bool(status.get("available")),
+            details={key: value for key, value in status.items() if key not in {"enabled", "available"}},
         )
 
 

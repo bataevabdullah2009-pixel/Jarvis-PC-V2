@@ -252,12 +252,28 @@ export type VoiceProfile = {
 
 export type CommandDefinition = {
   id: string;
+  title?: string;
   name?: string;
   phrases?: string[];
   triggers?: string[];
+  action_type?: string;
+  action_value?: string;
   action?: string | { type: string; target?: string; value?: string };
   value?: string;
+  enabled?: boolean;
+  confirm_required?: boolean;
   confirmation_required?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CommandPayload = {
+  title: string;
+  phrases: string[];
+  action_type: string;
+  action_value: string;
+  enabled?: boolean;
+  confirm_required?: boolean;
 };
 
 export type CommandsData = {
@@ -511,6 +527,20 @@ export const api = {
       body: JSON.stringify(patch)
     }),
   commands: () => request<CommandsData>("/commands"),
+  createCommand: (payload: CommandPayload) =>
+    request<CommandDefinition>("/commands", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateCommand: (commandId: string, payload: Partial<CommandPayload>) =>
+    request<CommandDefinition>(`/commands/${encodeURIComponent(commandId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  deleteCommand: (commandId: string) =>
+    request<{ deleted: boolean; command_id: string }>(`/commands/${encodeURIComponent(commandId)}`, {
+      method: "DELETE"
+    }),
   diagnostics: () =>
     request<DiagnosticsData>("/diagnostics/full-test", {
       method: "POST",

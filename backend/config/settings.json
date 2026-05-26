@@ -24,7 +24,7 @@
       "id": "jarvis_main",
       "name": "Jarvis Main",
       "provider": "fish_audio",
-      "voice_id": "",
+      "voice_id": "ebf770b9c0824939b4444355042fbcf6",
       "tone": "calm",
       "enabled": true
     },
@@ -53,9 +53,9 @@
   "voice_wake_enabled": true,
   "runtime_mode": "online",
   "autostart_enabled": true,
-  "ai_fallback": "groq",
-  "ai_primary": "groq",
-  "listener_enabled": false,
-  "listener_autostart": false,
-  "listener_device_id": "default"
+  "ai_fallback": "openrouter",
+  "ai_primary": "openrouter",
+  "listener_enabled": true,
+  "listener_autostart": true,
+  "listener_device_id": "1"
 }

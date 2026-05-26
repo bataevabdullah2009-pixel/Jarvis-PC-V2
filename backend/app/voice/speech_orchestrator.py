@@ -12,6 +12,8 @@ import winsound
 
 from app.core.config import LOG_DIR, Settings
 from app.providers.fish_audio import FishAudioTTS
+from app.providers.gpt_sovits_local import GPTSoVITSLocalTTS
+from app.providers.piper_local import PiperLocalTTS
 from app.providers.resemble_ai import ResembleTTS
 from app.providers.edge_tts_provider import EdgeTTSProvider
 from app.providers.offline_tts import OfflineTTS, text_only_response
@@ -186,8 +188,13 @@ class SpeechOrchestrator:
         self.resemble = ResembleTTS(settings)
         self.edge = EdgeTTSProvider(settings)
         self.offline = OfflineTTS(settings)
+        self.piper = PiperLocalTTS(settings)
+        self.gpt_sovits = GPTSoVITSLocalTTS(settings)
 
     def _fish_required(self) -> bool:
+        selected_provider = self.settings.selected_voice_provider()
+        if selected_provider and selected_provider != "fish_audio":
+            return False
         return bool(
             self.settings.tts_require_fish_audio
             or self.settings.voice_profile.strip().lower() == "jarvis style"
@@ -197,6 +204,10 @@ class SpeechOrchestrator:
         providers = []
         if self.fish.available():
             providers.append("fish_audio")
+        if self.piper.status().get("available"):
+            providers.append("piper_local")
+        if self.gpt_sovits.status().get("available"):
+            providers.append("gpt_sovits_local")
         if self._fish_required() or not self.settings.tts_fallback_enabled:
             return providers
         if self.resemble.available():
@@ -205,6 +216,7 @@ class SpeechOrchestrator:
             providers.append("edge_tts")
         if self.offline.available():
             providers.append("pyttsx3")
+        providers.append("text_only")
         return providers
 
     def say(self, text: str, *, dry_run: bool = False, blocking: bool = False) -> dict[str, Any]:
@@ -390,6 +402,48 @@ class SpeechOrchestrator:
             res = self.offline.speak(text, dry_run=dry_run)
             return _normalize(res, text, "pyttsx3")
 
+        elif provider in {"piper_local", "gpt_sovits_local"}:
+            engine = self.piper if provider == "piper_local" else self.gpt_sovits
+            if dry_run:
+                status = engine.status()
+                return _normalize(
+                    {
+                        "ok": bool(status.get("available")),
+                        "status": "dry_run" if status.get("available") else "failed",
+                        "error": None if status.get("available") else status.get("fix") or f"{provider} unavailable",
+                        "error_type": status.get("error_type") or (None if status.get("available") else f"{provider}_unavailable"),
+                        "fix": status.get("fix"),
+                    },
+                    text,
+                    provider,
+                )
+            synth = engine.synthesize(text)
+            if synth["ok"]:
+                try:
+                    if blocking:
+                        play_audio_sync(synth["audio"], synth.get("format", "wav"))
+                    else:
+                        play_audio_background(synth["audio"], synth.get("format", "wav"))
+                except Exception as exc:
+                    return _normalize(
+                        {
+                            **synth,
+                            "ok": False,
+                            "spoken": False,
+                            "played": False,
+                            "status": "failed",
+                            "error": str(exc),
+                            "error_type": f"{provider}_playback_error",
+                        },
+                        text,
+                        provider,
+                    )
+                return _normalize({**synth, "spoken": True, "played": True, "status": "completed"}, text, provider)
+            return _normalize(synth, text, provider)
+
+        elif provider == "text_only":
+            return self._text_only(text, "Selected voice provider is text_only.", time.perf_counter(), None)
+
         return None
 
     def _text_only(self, text: str, error: str, started: float, fix: str | None = None) -> dict[str, Any]:
@@ -455,6 +509,9 @@ class SpeechOrchestrator:
             "voice_identity": voice_identity,
             "primary_ready": (
                 self.fish.available() if primary == "fish_audio"
+                else bool(self.piper.status().get("available")) if primary == "piper_local"
+                else bool(self.gpt_sovits.status().get("available")) if primary == "gpt_sovits_local"
+                else True if primary == "text_only"
                 else self.edge.available() if primary == "edge_tts"
                 else self.offline.available() if primary == "pyttsx3"
                 else False

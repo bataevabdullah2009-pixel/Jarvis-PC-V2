@@ -82,6 +82,25 @@ VOICE_TONE_PRESETS: dict[str, str] = {
     "friendly": "дружелюбно, но без болтовни",
 }
 
+DEFAULT_WAKE_WORDS = ["джарвис", "чарли", "jarvis"]
+VOICE_TONE_PRESETS = {
+    "calm": "коротко, спокойно, уверенно",
+    "serious": "строго, без лишних слов",
+    "fast": "максимально коротко и быстро",
+    "cinematic": "в стиле ассистента из фантастического фильма",
+    "friendly": "дружелюбно, но без болтовни",
+}
+
+
+DEFAULT_WAKE_WORDS = ["\u0434\u0436\u0430\u0440\u0432\u0438\u0441", "\u0447\u0430\u0440\u043b\u0438", "jarvis"]
+VOICE_TONE_PRESETS = {
+    "calm": "\u043a\u043e\u0440\u043e\u0442\u043a\u043e, \u0441\u043f\u043e\u043a\u043e\u0439\u043d\u043e, \u0443\u0432\u0435\u0440\u0435\u043d\u043d\u043e",
+    "serious": "\u0441\u0442\u0440\u043e\u0433\u043e, \u0431\u0435\u0437 \u043b\u0438\u0448\u043d\u0438\u0445 \u0441\u043b\u043e\u0432",
+    "fast": "\u043c\u0430\u043a\u0441\u0438\u043c\u0430\u043b\u044c\u043d\u043e \u043a\u043e\u0440\u043e\u0442\u043a\u043e \u0438 \u0431\u044b\u0441\u0442\u0440\u043e",
+    "cinematic": "\u0432 \u0441\u0442\u0438\u043b\u0435 \u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043d\u0442\u0430 \u0438\u0437 \u0444\u0430\u043d\u0442\u0430\u0441\u0442\u0438\u0447\u0435\u0441\u043a\u043e\u0433\u043e \u0444\u0438\u043b\u044c\u043c\u0430",
+    "friendly": "\u0434\u0440\u0443\u0436\u0435\u043b\u044e\u0431\u043d\u043e, \u043d\u043e \u0431\u0435\u0437 \u0431\u043e\u043b\u0442\u043e\u0432\u043d\u0438",
+}
+
 
 def _split_csv(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
     if value is None:
@@ -417,11 +436,18 @@ class Settings:
     local_tts_provider: str = "piper"
     piper_enabled: bool = False
     piper_model_path: str = "models/piper/ru_RU.onnx"
+    piper_config_path: str = "models/piper/ru_RU.onnx.json"
+    piper_exe_path: str = ""
+    piper_speaker_id: str = ""
     xtts_enabled: bool = False
     xtts_api_url: str = "http://127.0.0.1:8020"
     xtts_model_path: str = "models/xtts"
     gpt_sovits_enabled: bool = False
     gpt_sovits_api_url: str = "http://127.0.0.1:9880"
+    gpt_sovits_refer_wav: str = ""
+    gpt_sovits_prompt_text: str = ""
+    gpt_sovits_prompt_lang: str = "ru"
+    gpt_sovits_text_lang: str = "ru"
     rvc_enabled: bool = False
     rvc_api_url: str = "http://127.0.0.1:7897"
     tts_pyttsx3_voice_id: str | None = None
@@ -504,10 +530,10 @@ class Settings:
             return env_bool(*names, default=default)
 
         def env_bool_override(field_name: str, *names: str, default: bool = False) -> bool:
-            if env_value(*names) is not None:
-                return env_bool(*names, default=default)
             if field_name in data:
                 return bool(data.get(field_name))
+            if env_value(*names) is not None:
+                return env_bool(*names, default=default)
             return default
 
         settings.vosk_model_path = env_value("JARVIS_VOSK_MODEL_PATH", "VOSK_MODEL_PATH", default=settings.vosk_model_path) or settings.vosk_model_path
@@ -562,11 +588,18 @@ class Settings:
         settings.local_tts_provider = env_value("JARVIS_LOCAL_TTS_PROVIDER", default=settings.local_tts_provider) or settings.local_tts_provider
         settings.piper_enabled = env_bool("JARVIS_PIPER_ENABLED", default=settings.piper_enabled)
         settings.piper_model_path = env_value("JARVIS_PIPER_MODEL_PATH", default=settings.piper_model_path) or settings.piper_model_path
+        settings.piper_config_path = env_value("JARVIS_PIPER_CONFIG_PATH", default=settings.piper_config_path) or settings.piper_config_path
+        settings.piper_exe_path = env_value("JARVIS_PIPER_EXE_PATH", default=settings.piper_exe_path) or settings.piper_exe_path
+        settings.piper_speaker_id = env_value("JARVIS_PIPER_SPEAKER_ID", default=settings.piper_speaker_id) or settings.piper_speaker_id
         settings.xtts_enabled = env_bool("JARVIS_XTTS_ENABLED", default=settings.xtts_enabled)
         settings.xtts_api_url = env_value("JARVIS_XTTS_API_URL", default=settings.xtts_api_url) or settings.xtts_api_url
         settings.xtts_model_path = env_value("JARVIS_XTTS_MODEL_PATH", default=settings.xtts_model_path) or settings.xtts_model_path
         settings.gpt_sovits_enabled = env_bool("JARVIS_GPT_SOVITS_ENABLED", default=settings.gpt_sovits_enabled)
         settings.gpt_sovits_api_url = env_value("JARVIS_GPT_SOVITS_API_URL", default=settings.gpt_sovits_api_url) or settings.gpt_sovits_api_url
+        settings.gpt_sovits_refer_wav = env_value("JARVIS_GPT_SOVITS_REFER_WAV", default=settings.gpt_sovits_refer_wav) or settings.gpt_sovits_refer_wav
+        settings.gpt_sovits_prompt_text = env_value("JARVIS_GPT_SOVITS_PROMPT_TEXT", default=settings.gpt_sovits_prompt_text) or settings.gpt_sovits_prompt_text
+        settings.gpt_sovits_prompt_lang = env_value("JARVIS_GPT_SOVITS_PROMPT_LANG", default=settings.gpt_sovits_prompt_lang) or settings.gpt_sovits_prompt_lang
+        settings.gpt_sovits_text_lang = env_value("JARVIS_GPT_SOVITS_TEXT_LANG", default=settings.gpt_sovits_text_lang) or settings.gpt_sovits_text_lang
         settings.rvc_enabled = env_bool("JARVIS_RVC_ENABLED", default=settings.rvc_enabled)
         settings.rvc_api_url = env_value("JARVIS_RVC_API_URL", default=settings.rvc_api_url) or settings.rvc_api_url
         settings.tts_fallback = env_value("JARVIS_TTS_FALLBACK", "TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
@@ -708,11 +741,18 @@ class Settings:
             "local_tts_provider": self.local_tts_provider,
             "piper_enabled": self.piper_enabled,
             "piper_model_path": self.piper_model_path,
+            "piper_config_path": self.piper_config_path,
+            "piper_exe_path": self.piper_exe_path,
+            "piper_speaker_id": self.piper_speaker_id,
             "xtts_enabled": self.xtts_enabled,
             "xtts_api_url": self.xtts_api_url,
             "xtts_model_path": self.xtts_model_path,
             "gpt_sovits_enabled": self.gpt_sovits_enabled,
             "gpt_sovits_api_url": self.gpt_sovits_api_url,
+            "gpt_sovits_refer_wav": self.gpt_sovits_refer_wav,
+            "gpt_sovits_prompt_text": self.gpt_sovits_prompt_text,
+            "gpt_sovits_prompt_lang": self.gpt_sovits_prompt_lang,
+            "gpt_sovits_text_lang": self.gpt_sovits_text_lang,
             "rvc_enabled": self.rvc_enabled,
             "rvc_api_url": self.rvc_api_url,
             "listener_enabled": self.listener_enabled,
