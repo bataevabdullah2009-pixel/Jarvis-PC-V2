@@ -84,6 +84,10 @@ class FishAudioTTS:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        if self.settings.selected_voice_provider() == "fish_audio":
+            selected_voice_id = self.settings.selected_voice_id()
+            if selected_voice_id:
+                self.settings.fish_audio_voice_id = selected_voice_id
         self._client: httpx.Client | None = None
 
     def _get_client(self) -> httpx.Client:
@@ -146,15 +150,23 @@ class FishAudioTTS:
             fish_logger.info("[FISH] status_code=200 latency_ms=0 audio_bytes=%s cached=true retry_count=0", cached["audio_bytes"])
             return {**cached, "ok": True, "provider": "fish_audio", "endpoint": self.endpoint, "status_code": 200, "cached": True, "latency_ms": 0, "retry_count": 0}
 
+        tone = self.settings.effective_voice_tone()
+        temperature_by_tone = {
+            "calm": 0.55,
+            "serious": 0.45,
+            "fast": 0.35,
+            "cinematic": 0.75,
+            "friendly": 0.65,
+        }
         payload = {
             "text": safe_text,
             "reference_id": self.settings.fish_audio_voice_id,
-            "temperature": 0.7,
+            "temperature": temperature_by_tone.get(tone, 0.55),
             "top_p": 0.7,
             "format": "wav",
             "sample_rate": 44100,
             "normalize": True,
-            "latency": "normal",
+            "latency": "balanced" if tone == "fast" else "normal",
         }
         headers = {
             "Authorization": f"Bearer {self.settings.fish_audio_api_key}",

@@ -115,7 +115,7 @@ def test_listener_sends_command_after_wake_word():
          patch("app.voice.listener.capture_audio") as mock_capture_func:
          
         mock_stt = mock_stt_class.return_value
-        mock_stt.transcribe.return_value = {"transcript": "джарвис"}
+        mock_stt.transcribe.return_value = {"transcript": "джарвис как дела"}
         
         mock_orch = mock_orch_class.return_value
         mock_orch.ask.return_value = {"text": "Да, сэр?"}
@@ -125,8 +125,7 @@ def test_listener_sends_command_after_wake_word():
         
         # Simulate STT command call
         mock_stt.transcribe.side_effect = [
-            {"transcript": "джарвис"},  # trigger search
-            {"transcript": "как дела"}  # command recording
+            {"transcript": "джарвис как дела"},  # wake word and command in one window
         ]
         
         voice_listener.wake_word_enabled = True
@@ -165,8 +164,8 @@ def test_listener_rate_limit_prevents_loop():
         voice_listener._stop_event.is_set = MagicMock(side_effect=[False, True])
         voice_listener.run_loop()
         
-        # State transitions to cooldown and then back to listening_for_trigger after time.sleep
-        assert voice_listener.state == "listening_for_trigger"
+        # State transitions to cooldown and then back to listening_for_wake_word after time.sleep
+        assert voice_listener.state in {"listening_for_trigger", "listening_for_wake_word"}
         assert len(voice_listener.warnings) > 0
 
 

@@ -72,6 +72,102 @@ PROJECT_ROOT = _resolve_project_root()
 CONFIG_DIR = BACKEND_ROOT / "config"
 LOG_DIR = PROJECT_ROOT / "logs"
 
+DEFAULT_WAKE_WORDS = ["джарвис", "чарли", "jarvis"]
+VOICE_TONES = {"calm", "serious", "fast", "cinematic", "friendly"}
+VOICE_TONE_PRESETS: dict[str, str] = {
+    "calm": "коротко, спокойно, уверенно",
+    "serious": "строго, без лишних слов",
+    "fast": "максимально коротко и быстро",
+    "cinematic": "в стиле ассистента из фантастического фильма",
+    "friendly": "дружелюбно, но без болтовни",
+}
+
+
+def _split_csv(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = [str(item).strip() for item in value]
+    else:
+        items = [item.strip() for item in str(value).split(",")]
+    return [item for item in items if item]
+
+
+def _mask_secret(value: str | None) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def _default_voice_profiles(main_voice_id: str | None = None, voice_id_2: str | None = None, voice_id_3: str | None = None) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "jarvis_main",
+            "name": "Jarvis Main",
+            "provider": "fish_audio",
+            "voice_id": main_voice_id or "",
+            "tone": "calm",
+            "enabled": True,
+        },
+        {
+            "id": "jarvis_deep",
+            "name": "Jarvis Deep",
+            "provider": "fish_audio",
+            "voice_id": voice_id_2 or "",
+            "tone": "serious",
+            "enabled": True,
+        },
+        {
+            "id": "assistant_alt",
+            "name": "Assistant Alt",
+            "provider": "fish_audio",
+            "voice_id": voice_id_3 or "",
+            "tone": "friendly",
+            "enabled": True,
+        },
+    ]
+
+
+def normalize_voice_profiles(value: Any, main_voice_id: str | None = None, voice_id_2: str | None = None, voice_id_3: str | None = None) -> list[dict[str, Any]]:
+    defaults = _default_voice_profiles(main_voice_id, voice_id_2, voice_id_3)
+    default_by_id = {profile["id"]: profile for profile in defaults}
+    profiles: list[dict[str, Any]] = []
+
+    if isinstance(value, list):
+        for raw_profile in value:
+            if not isinstance(raw_profile, dict):
+                continue
+            profile_id = str(raw_profile.get("id") or "").strip()
+            if not profile_id:
+                continue
+            base = dict(default_by_id.get(profile_id, {}))
+            merged = {**base, **raw_profile}
+            if not merged.get("voice_id") and base.get("voice_id"):
+                merged["voice_id"] = base["voice_id"]
+            tone = str(merged.get("tone") or "calm").strip().lower()
+            profiles.append(
+                {
+                    "id": profile_id,
+                    "name": str(merged.get("name") or profile_id),
+                    "provider": str(merged.get("provider") or "fish_audio"),
+                    "voice_id": str(merged.get("voice_id") or ""),
+                    "tone": tone if tone in VOICE_TONES else "calm",
+                    "enabled": bool(merged.get("enabled", True)),
+                }
+            )
+
+    existing_ids = {profile["id"] for profile in profiles}
+    for default_profile in defaults:
+        if default_profile["id"] not in existing_ids:
+            profiles.append(dict(default_profile))
+    return profiles
+
+
+def tone_instruction(tone: str) -> str:
+    return VOICE_TONE_PRESETS.get((tone or "calm").strip().lower(), VOICE_TONE_PRESETS["calm"])
+
 ENV_PATHS_CHECKED: list[Path] = []
 ENV_PATHS_LOADED: list[Path] = []
 ENV_LOAD_ERRORS: dict[str, str] = {}
@@ -280,6 +376,9 @@ class Settings:
     workspace_project_path: str = r"C:\Jarvis\jarvis-car"
     open_terminal_with_workspace: bool = False
     voice_profile: str = "Jarvis style"
+    assistant_name: str = "Джарвис"
+    assistant_display_name: str = "JARVIS"
+    assistant_address_style: str = "сэр"
     voice_wake_enabled: bool = True
     clap_enabled: bool = True
     runtime_mode: str = "hybrid"
@@ -301,6 +400,11 @@ class Settings:
     groq_temperature: float = 0.4
     fish_audio_api_key: str | None = None
     fish_audio_voice_id: str | None = None
+    fish_audio_voice_id_2: str | None = None
+    fish_audio_voice_id_3: str | None = None
+    voice_profile_id: str = "jarvis_main"
+    voice_profiles: list[dict[str, Any]] = field(default_factory=lambda: _default_voice_profiles())
+    voice_tone: str = "calm"
     resemble_api_key: str | None = None
     resemble_project_id: str | None = None
     resemble_voice_id: str | None = None
@@ -314,15 +418,18 @@ class Settings:
     piper_enabled: bool = False
     piper_model_path: str = "models/piper/ru_RU.onnx"
     xtts_enabled: bool = False
+    xtts_api_url: str = "http://127.0.0.1:8020"
     xtts_model_path: str = "models/xtts"
     gpt_sovits_enabled: bool = False
     gpt_sovits_api_url: str = "http://127.0.0.1:9880"
+    rvc_enabled: bool = False
+    rvc_api_url: str = "http://127.0.0.1:7897"
     tts_pyttsx3_voice_id: str | None = None
     tts_pyttsx3_rate: int = 175
     tts_pyttsx3_volume: float = 0.8
     listener_enabled: bool = True
     listener_autostart: bool = True
-    wake_words: str = "джарвис,чарли,jarvis"
+    wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_WAKE_WORDS))
     listener_device_id: str = "default"
     command_record_seconds: int = 6
     cooldown_ms: int = 2500
@@ -355,6 +462,30 @@ class Settings:
     )
     allowed_folders: list[str] = field(default_factory=list)
 
+    def selected_voice_profile(self) -> dict[str, Any]:
+        for profile in self.voice_profiles:
+            if profile.get("id") == self.voice_profile_id:
+                return profile
+        return self.voice_profiles[0] if self.voice_profiles else _default_voice_profiles()[0]
+
+    def selected_voice_id(self) -> str:
+        profile = self.selected_voice_profile()
+        if profile.get("provider") == "fish_audio":
+            return str(profile.get("voice_id") or "")
+        return ""
+
+    def selected_voice_provider(self) -> str:
+        return str(self.selected_voice_profile().get("provider") or "text_only")
+
+    def effective_voice_tone(self) -> str:
+        profile_tone = str(self.selected_voice_profile().get("tone") or "").strip().lower()
+        tone = profile_tone or self.voice_tone
+        return tone if tone in VOICE_TONES else "calm"
+
+    def address(self) -> str:
+        value = (self.assistant_address_style or "").strip()
+        return "" if value == "без обращения" else value
+
     @classmethod
     def load(cls) -> "Settings":
         load_environment()
@@ -384,6 +515,9 @@ class Settings:
         settings.ai_primary = env_default("ai_primary", "JARVIS_AI_PRIMARY", "AI_PRIMARY", default=settings.ai_primary) or settings.ai_primary
         settings.ai_fallback = env_default("ai_fallback", "JARVIS_AI_FALLBACK", "AI_FALLBACK", default=settings.ai_fallback) or settings.ai_fallback
         settings.ai_allow_local_fallback = env_bool_default("ai_allow_local_fallback", "JARVIS_AI_ALLOW_LOCAL_FALLBACK", "AI_ALLOW_LOCAL_FALLBACK", default=settings.ai_allow_local_fallback)
+        settings.assistant_name = env_default("assistant_name", "JARVIS_ASSISTANT_NAME", default=settings.assistant_name) or "Джарвис"
+        settings.assistant_display_name = env_default("assistant_display_name", "JARVIS_ASSISTANT_DISPLAY_NAME", default=settings.assistant_display_name) or "JARVIS"
+        settings.assistant_address_style = env_default("assistant_address_style", "JARVIS_ADDRESS_STYLE", default=settings.assistant_address_style) or "сэр"
         settings.openrouter_api_key = env_value("JARVIS_OPENROUTER_API_KEY", "OPENROUTER_API_KEY")
         settings.openrouter_model = env_value("JARVIS_OPENROUTER_MODEL", "OPENROUTER_MODEL", default=settings.openrouter_model) or settings.openrouter_model
         settings.groq_api_key = env_value("JARVIS_GROQ_API_KEY", "GROQ_API_KEY")
@@ -401,7 +535,25 @@ class Settings:
         except ValueError:
             settings.groq_temperature = 0.4
         settings.fish_audio_api_key = env_value("JARVIS_FISH_AUDIO_API_KEY", "FISH_AUDIO_API_KEY")
-        settings.fish_audio_voice_id = env_value("JARVIS_FISH_AUDIO_VOICE_ID", "FISH_AUDIO_VOICE_ID")
+        settings.fish_audio_voice_id = env_value("JARVIS_FISH_AUDIO_VOICE_ID", "FISH_AUDIO_VOICE_ID") or settings.fish_audio_voice_id
+        settings.fish_audio_voice_id_2 = env_value("JARVIS_FISH_AUDIO_VOICE_ID_2", default=settings.fish_audio_voice_id_2)
+        settings.fish_audio_voice_id_3 = env_value("JARVIS_FISH_AUDIO_VOICE_ID_3", default=settings.fish_audio_voice_id_3)
+        settings.voice_profile_id = env_default("voice_profile_id", "JARVIS_VOICE_PROFILE_ID", default=settings.voice_profile_id) or "jarvis_main"
+        settings.voice_profiles = normalize_voice_profiles(
+            data.get("voice_profiles", settings.voice_profiles),
+            settings.fish_audio_voice_id,
+            settings.fish_audio_voice_id_2,
+            settings.fish_audio_voice_id_3,
+        )
+        profile_ids = {str(profile.get("id")) for profile in settings.voice_profiles}
+        if settings.voice_profile_id not in profile_ids:
+            settings.voice_profile_id = "jarvis_main"
+        settings.voice_tone = (env_default("voice_tone", "JARVIS_VOICE_TONE", default=settings.voice_tone) or "calm").strip().lower()
+        if settings.voice_tone not in VOICE_TONES:
+            settings.voice_tone = "calm"
+        if settings.selected_voice_provider() == "fish_audio":
+            selected_voice_id = settings.selected_voice_id()
+            settings.fish_audio_voice_id = selected_voice_id or None
         settings.resemble_api_key = env_value("JARVIS_RESEMBLE_API_KEY", "RESEMBLE_API_KEY")
         settings.resemble_project_id = env_value("JARVIS_RESEMBLE_PROJECT_ID", "RESEMBLE_PROJECT_ID")
         settings.resemble_voice_id = env_value("JARVIS_RESEMBLE_VOICE_ID", "RESEMBLE_VOICE_ID")
@@ -411,9 +563,12 @@ class Settings:
         settings.piper_enabled = env_bool("JARVIS_PIPER_ENABLED", default=settings.piper_enabled)
         settings.piper_model_path = env_value("JARVIS_PIPER_MODEL_PATH", default=settings.piper_model_path) or settings.piper_model_path
         settings.xtts_enabled = env_bool("JARVIS_XTTS_ENABLED", default=settings.xtts_enabled)
+        settings.xtts_api_url = env_value("JARVIS_XTTS_API_URL", default=settings.xtts_api_url) or settings.xtts_api_url
         settings.xtts_model_path = env_value("JARVIS_XTTS_MODEL_PATH", default=settings.xtts_model_path) or settings.xtts_model_path
         settings.gpt_sovits_enabled = env_bool("JARVIS_GPT_SOVITS_ENABLED", default=settings.gpt_sovits_enabled)
         settings.gpt_sovits_api_url = env_value("JARVIS_GPT_SOVITS_API_URL", default=settings.gpt_sovits_api_url) or settings.gpt_sovits_api_url
+        settings.rvc_enabled = env_bool("JARVIS_RVC_ENABLED", default=settings.rvc_enabled)
+        settings.rvc_api_url = env_value("JARVIS_RVC_API_URL", default=settings.rvc_api_url) or settings.rvc_api_url
         settings.tts_fallback = env_value("JARVIS_TTS_FALLBACK", "TTS_FALLBACK", default=settings.tts_fallback) or settings.tts_fallback
         settings.tts_fallback_enabled = env_bool("JARVIS_TTS_FALLBACK_ENABLED", "TTS_FALLBACK_ENABLED", default=settings.tts_fallback_enabled)
         settings.tts_require_fish_audio = env_bool("JARVIS_TTS_REQUIRE_FISH_AUDIO", "TTS_REQUIRE_FISH_AUDIO", "JARVIS_VOICE_LOCK", default=settings.tts_require_fish_audio)
@@ -467,7 +622,12 @@ class Settings:
         settings.listener_autostart = env_bool_override("listener_autostart", "JARVIS_LISTENER_AUTOSTART", "LISTENER_AUTOSTART", default=True)
         settings.voice_wake_enabled = env_bool_default("voice_wake_enabled", "JARVIS_VOICE_WAKE_ENABLED", "VOICE_WAKE_ENABLED", default=settings.voice_wake_enabled)
         settings.clap_enabled = env_bool_default("clap_enabled", "JARVIS_CLAP_ENABLED", "CLAP_ENABLED", default=settings.clap_enabled)
-        settings.wake_words = env_default("wake_words", "JARVIS_WAKE_WORDS", "WAKE_WORDS", default="джарвис,чарли,jarvis") or "джарвис,чарли,jarvis"
+        wake_words_value: str | list[str] | None
+        if "wake_words" in data:
+            wake_words_value = data.get("wake_words")
+        else:
+            wake_words_value = env_value("JARVIS_WAKE_WORDS", "WAKE_WORDS", default=",".join(DEFAULT_WAKE_WORDS))
+        settings.wake_words = _split_csv(wake_words_value) or list(DEFAULT_WAKE_WORDS)
         settings.listener_device_id = env_default("listener_device_id", "JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
         try:
             settings.command_record_seconds = int(env_value("JARVIS_COMMAND_RECORD_SECONDS", "COMMAND_RECORD_SECONDS", default="6") or "6")
@@ -503,6 +663,9 @@ class Settings:
             "news_rss_url": self.news_rss_url,
             "workspace_project_path": self.workspace_project_path,
             "voice_profile": self.voice_profile,
+            "assistant_name": self.assistant_name,
+            "assistant_display_name": self.assistant_display_name,
+            "assistant_address_style": self.assistant_address_style,
             "voice_wake_enabled": self.voice_wake_enabled,
             "clap_enabled": self.clap_enabled,
             "runtime_mode": self.runtime_mode,
@@ -521,6 +684,7 @@ class Settings:
             "openrouter_model": self.openrouter_model,
             "fish_audio_configured": bool(self.fish_audio_api_key),
             "fish_audio_voice_configured": bool(self.fish_audio_voice_id),
+            "fish_audio_voice_id_masked": _mask_secret(self.fish_audio_voice_id),
             "resemble_configured": bool(self.resemble_api_key),
             "resemble_project_configured": bool(self.resemble_project_id),
             "resemble_voice_configured": bool(self.resemble_voice_id),
@@ -530,13 +694,27 @@ class Settings:
             "tts_require_fish_audio": self.tts_require_fish_audio,
             "tts_timeout_seconds": self.tts_timeout_seconds,
             "voice_provider": self.voice_provider,
+            "voice_profile_id": self.voice_profile_id,
+            "voice_profiles": [
+                {
+                    **profile,
+                    "voice_id_masked": _mask_secret(str(profile.get("voice_id") or "")),
+                }
+                for profile in self.voice_profiles
+            ],
+            "voice_tone": self.voice_tone,
+            "effective_voice_tone": self.effective_voice_tone(),
+            "tone_instruction": tone_instruction(self.effective_voice_tone()),
             "local_tts_provider": self.local_tts_provider,
             "piper_enabled": self.piper_enabled,
             "piper_model_path": self.piper_model_path,
             "xtts_enabled": self.xtts_enabled,
+            "xtts_api_url": self.xtts_api_url,
             "xtts_model_path": self.xtts_model_path,
             "gpt_sovits_enabled": self.gpt_sovits_enabled,
             "gpt_sovits_api_url": self.gpt_sovits_api_url,
+            "rvc_enabled": self.rvc_enabled,
+            "rvc_api_url": self.rvc_api_url,
             "listener_enabled": self.listener_enabled,
             "listener_autostart": self.listener_autostart,
             "wake_words": self.wake_words,
@@ -566,6 +744,9 @@ def patch_settings(patch: dict[str, Any]) -> Settings:
         "ai_fallback",
         "ai_allow_local_fallback",
         "voice_profile",
+        "assistant_name",
+        "assistant_display_name",
+        "assistant_address_style",
         "voice_wake_enabled",
         "clap_enabled",
         "runtime_mode",
@@ -576,10 +757,21 @@ def patch_settings(patch: dict[str, Any]) -> Settings:
         "listener_autostart",
         "listener_device_id",
         "wake_words",
+        "voice_profile_id",
+        "voice_profiles",
+        "voice_tone",
     }
     current = _read_json(CONFIG_DIR / "settings.json", {})
     for key, value in patch.items():
         if key in editable:
+            if key == "wake_words":
+                value = _split_csv(value) or list(DEFAULT_WAKE_WORDS)
+            elif key == "voice_profiles":
+                value = normalize_voice_profiles(value)
+            elif key == "voice_tone":
+                value = str(value).strip().lower()
+                if value not in VOICE_TONES:
+                    value = "calm"
             current[key] = value
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)

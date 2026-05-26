@@ -179,3 +179,18 @@ python tools\check_source_format.py
 ```
 
 Guard проверяет переносы строк, минимальную длину launcher-файлов, длинную первую строку и компиляцию Python.
+
+## Optional local voice engines
+
+Fish Audio remains the primary cloud voice provider. Local engines are prepared as an optional registry only; heavy models are not installed automatically.
+
+- Piper: set `JARVIS_PIPER_ENABLED=true` and `JARVIS_PIPER_MODEL_PATH=models/piper/ru_RU.onnx`. Install separately with `pip install piper-tts`.
+- XTTS v2: set `JARVIS_XTTS_ENABLED=true` and run a local API at `JARVIS_XTTS_API_URL`, default `http://127.0.0.1:8020`.
+- GPT-SoVITS: set `JARVIS_GPT_SOVITS_ENABLED=true` and run the API at `JARVIS_GPT_SOVITS_API_URL`, default `http://127.0.0.1:9880`.
+- RVC: set `JARVIS_RVC_ENABLED=true` and run the converter API at `JARVIS_RVC_API_URL`, default `http://127.0.0.1:7897`.
+
+Check readiness:
+
+```powershell
+curl.exe http://127.0.0.1:18000/debug/local-voice-status
+```

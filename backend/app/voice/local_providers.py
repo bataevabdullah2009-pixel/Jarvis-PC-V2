@@ -30,7 +30,11 @@ class PiperLocalProvider:
             name=self.name,
             enabled=self.settings.piper_enabled,
             available=self.settings.piper_enabled and model_exists,
-            details={"model_exists": model_exists},
+            details={
+                "model_path": self.settings.piper_model_path,
+                "model_exists": model_exists,
+                "install_hint": "pip install piper-tts",
+            },
         )
 
 
@@ -41,12 +45,11 @@ class XTTSLocalProvider:
         self.settings = settings
 
     def status(self) -> VoiceProviderStatus:
-        model_exists = Path(self.settings.xtts_model_path).exists()
         return VoiceProviderStatus(
             name=self.name,
             enabled=self.settings.xtts_enabled,
-            available=self.settings.xtts_enabled and model_exists,
-            details={"model_exists": model_exists},
+            available=False,
+            details={"api_url": self.settings.xtts_api_url},
         )
 
 
@@ -62,4 +65,19 @@ class GPTSoVITSLocalProvider:
             enabled=self.settings.gpt_sovits_enabled,
             available=False,
             details={"api_url": self.settings.gpt_sovits_api_url},
+        )
+
+
+class RVCConverterProvider:
+    name = "rvc_converter"
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def status(self) -> VoiceProviderStatus:
+        return VoiceProviderStatus(
+            name=self.name,
+            enabled=self.settings.rvc_enabled,
+            available=False,
+            details={"api_url": self.settings.rvc_api_url},
         )

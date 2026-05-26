@@ -207,6 +207,14 @@ export type SettingsData = {
   news_rss_url?: string;
   workspace_project_path: string;
   voice_profile: string;
+  assistant_name?: string;
+  assistant_display_name?: string;
+  assistant_address_style?: string;
+  voice_profile_id?: string;
+  voice_profiles?: VoiceProfile[];
+  voice_tone?: "calm" | "serious" | "fast" | "cinematic" | "friendly" | string;
+  effective_voice_tone?: string;
+  tone_instruction?: string;
   offline_mode: boolean;
   voice_wake_enabled?: boolean;
   clap_enabled?: boolean;
@@ -229,7 +237,17 @@ export type SettingsData = {
   listener_enabled?: boolean;
   listener_autostart?: boolean;
   listener_device_id?: string;
-  wake_words?: string;
+  wake_words?: string[] | string;
+};
+
+export type VoiceProfile = {
+  id: string;
+  name: string;
+  provider: string;
+  voice_id?: string;
+  voice_id_masked?: string;
+  tone: string;
+  enabled: boolean;
 };
 
 export type CommandDefinition = {
@@ -271,10 +289,11 @@ export type TTSStatusData = {
   active_job_id?: string | null;
   last_job_id?: string | null;
   last_job_age_seconds?: number;
-  last_job_status?: "queued" | "started" | "generated" | "playing" | "played" | "failed" | "none" | string | null;
+  last_job_status?: "queued" | "started" | "playing" | "played" | "failed" | "cancelled" | "text_only" | "none" | string | null;
   last_provider?: string | null;
   last_error_type?: string | null;
   last_played_at?: number | null;
+  stuck_jobs?: Array<{ job_id: string; status: string; age_seconds: number }>;
 };
 
 export type BuildInfoData = {
@@ -392,6 +411,18 @@ export type AIProviderStatusData = {
   };
 };
 
+export type LocalVoiceStatusData = Record<
+  string,
+  {
+    enabled: boolean;
+    available: boolean;
+    model_exists?: boolean;
+    model_path?: string;
+    api_url?: string;
+    install_hint?: string;
+  }
+>;
+
 export type EventPayload = {
   event_id?: string;
   type: string;
@@ -499,6 +530,7 @@ export const api = {
   debugEnvStatus: () => rawRequest<DebugEnvStatus>("/debug/env-status"),
   aiProviderStatus: () => request<AIProviderStatusData>("/debug/ai-provider-status"),
   voiceProviderStatus: () => request<VoiceProviderStatusData>("/debug/voice-provider-status"),
+  localVoiceStatus: () => request<LocalVoiceStatusData>("/debug/local-voice-status"),
   testJarvisVoice: (text = "Проверка голоса Джарвиса. Я на связи, сэр.") =>
     request<ProviderTestResult>("/debug/test-jarvis-voice", {
       method: "POST",

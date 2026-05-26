@@ -116,7 +116,7 @@ def check_required_file_lengths(errors: list[str]) -> None:
     required = {
         "tools/check_source_format.py": 120,
         "tools/start_jarvis.ps1": 80,
-        ".env.example": 40,
+        ".env.example": 60,
         "README.md": 50,
         "backend/run_backend.py": 10,
         "backend/app/main.py": 300,

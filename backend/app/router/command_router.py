@@ -527,6 +527,12 @@ class CommandRouter:
         openrouter_ms: int = 0,
     ) -> dict[str, Any]:
         safe_text = (response_text or "").strip() or "Команда выполнена."
+        address = self.settings.address()
+        if address != "сэр":
+            if address:
+                safe_text = safe_text.replace("сэр", address).replace("Сэр", address.capitalize())
+            else:
+                safe_text = safe_text.replace(", сэр", "").replace("Сэр, ", "").replace(" сэр", "")
         tts_started = time.perf_counter()
 
         skip_tts = skip_tts or self._skip_tts

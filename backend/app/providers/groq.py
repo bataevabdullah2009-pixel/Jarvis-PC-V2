@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import requests
 
-from app.core.config import LOG_DIR, Settings
+from app.core.config import LOG_DIR, Settings, tone_instruction
 from app.providers.openrouter import PlannerResult
 
 
@@ -83,11 +83,20 @@ class GroqPlanner:
         if not self.settings.groq_model:
             return self._unavailable("model_missing", None, "Groq model is missing.", 0, called=False)
 
-        system_prompt = SYSTEM_PROMPT
+        address = self.settings.address()
+        system_prompt = (
+            SYSTEM_PROMPT
+            + f" Твое имя: {self.settings.assistant_name}."
+            + f" Отображаемое имя: {self.settings.assistant_display_name}."
+            + f" Обращение к пользователю: {address or 'без обращения'}."
+            + f" Тон ответа: {tone_instruction(self.settings.effective_voice_tone())}."
+        )
         max_tokens = self.settings.groq_max_tokens
         if context.get("source") == "voice" or context.get("route") == "voice":
             system_prompt += " Голосовой ответ: максимум 1-3 коротких предложения."
             max_tokens = min(max_tokens, 120)
+            if self.settings.effective_voice_tone() == "fast":
+                max_tokens = min(max_tokens, 60)
 
         payload = {
             "model": self.settings.groq_model,

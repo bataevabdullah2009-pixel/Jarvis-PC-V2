@@ -16,6 +16,8 @@ from app.voice.anti_echo import (
     check_loopback_device,
     SELF_ECHO_FIX,
 )
+from app.voice.tts import TTSService
+from app.voice.wakeword import extract_wake_command
 from app.core.assistant_orchestrator import AssistantOrchestrator
 
 logger = logging.getLogger("jarvis.listener")
@@ -36,14 +38,17 @@ class VoiceListener:
         if getattr(self, "_initialized", False):
             return
 
-        self.state = "stopped"  # stopped, idle, listening_for_trigger, triggered, recording_command, transcribing, sending_to_assistant, speaking, cooldown, error
+        self.state = "stopped"
         self.device_id = "default"
         self.device_name = "Default Device"
         self.wake_word_enabled = True
-        self.clap_enabled = True
+        self.clap_enabled = False
 
         self.last_trigger = ""
         self.last_transcript = ""
+        self.last_heard_text = ""
+        self.last_wake_word = ""
+        self.last_command_text = ""
         self.last_ignored_reason = ""
         self.last_error_type: str | None = None
         self.last_error: str | None = None
@@ -56,11 +61,15 @@ class VoiceListener:
         # Metrics
         self.metrics = {
             "audio_windows": 0,
+            "transcripts": 0,
             "triggers": 0,
+            "wake_triggers": 0,
+            "ignored_no_wake_word": 0,
             "commands_sent": 0,
             "ignored_self_audio": 0,
             "no_audio_events": 0,
-            "self_echo_blocks": 0
+            "self_echo_blocks": 0,
+            "cooldown_blocks": 0,
         }
 
         self._thread: threading.Thread | None = None
@@ -69,6 +78,9 @@ class VoiceListener:
         self._assistant_lock = threading.Lock()
 
         self._initialized = True
+
+    def _inc_metric(self, key: str, amount: int = 1) -> None:
+        self.metrics[key] = int(self.metrics.get(key, 0)) + amount
 
     def check_safe_start(self, device_id: str = "default") -> dict[str, Any]:
         """
@@ -148,7 +160,7 @@ class VoiceListener:
             "checks": checks
         }
 
-    def start(self, device_id: str = "default", wake_word_enabled: bool = True, clap_enabled: bool = True, force_start: bool = False) -> dict[str, Any]:
+    def start(self, device_id: str = "default", wake_word_enabled: bool = True, clap_enabled: bool = False, force_start: bool = False) -> dict[str, Any]:
         """Starts the background listening thread if not already running."""
         with self._lock:
             if self.state != "stopped" and self._thread and self._thread.is_alive():
@@ -212,7 +224,7 @@ class VoiceListener:
 
             # Start thread
             self._stop_event.clear()
-            self.state = "idle"
+            self.state = "starting"
             self._thread = threading.Thread(target=self.run_loop, daemon=True)
             self._thread.start()
 
@@ -271,45 +283,24 @@ class VoiceListener:
     def status(self) -> dict[str, Any]:
         """Returns the full listener status structured response."""
         settings = get_settings()
-        listener_running = self.state != "stopped" and self._thread is not None and self._thread.is_alive()
-        if not settings.listener_enabled and not listener_running:
-            return {
-                "ok": True,
-                "data": {
-                    "enabled": False,
-                    "autostart": settings.listener_autostart,
-                    "running": False,
-                    "state": "stopped",
-                    "device_id": str(self.device_id),
-                    "device_name": self.device_name,
-                    "wake_word_enabled": self.wake_word_enabled,
-                    "clap_enabled": self.clap_enabled,
-                    "last_trigger": self.last_trigger,
-                    "last_transcript": self.last_transcript,
-                    "last_ignored_reason": self.last_ignored_reason,
-                    "speaking": is_speaking_now(),
-                    "cooldown_until": None,
-                    "metrics": dict(self.metrics),
-                    "safe_to_start": False,
-                    "reason": "listener disabled by default",
-                    "last_error_type": self.last_error_type,
-                    "last_error": self.last_error,
-                    "fix": self.fix,
-                    "errors": [],
-                    "warnings": []
-                }
-            }
+        running = self.state not in {"stopped", "blocked", "error"} and self._thread is not None and self._thread.is_alive()
+        gate_res = {"safe_to_start": False, "failed_check": None, "fix": None, "checks": {}}
+        if settings.listener_enabled and not running:
+            gate_res = self.check_safe_start(self.device_id)
+        elif running:
+            gate_res = {"safe_to_start": True, "failed_check": None, "fix": None, "checks": {"listener_running": True}}
 
-        gate_res = self.check_safe_start(self.device_id)
-
-        reason = None
-        if not settings.listener_enabled:
-            reason = "listener disabled by default"
-
-        running = self.state != "stopped" and self._thread is not None and self._thread.is_alive()
         display_state = self.state
-        if settings.listener_enabled and settings.listener_autostart and not running and not gate_res["safe_to_start"]:
+        if not settings.listener_enabled and not running:
+            display_state = "stopped"
+        elif settings.listener_enabled and settings.listener_autostart and not running:
             display_state = "blocked"
+            if not self.last_error_type:
+                self.last_error_type = gate_res["failed_check"] or "listener_exception"
+                self.last_error = self.last_error or "Listener is enabled but no background worker is running."
+                self.fix = self.fix or gate_res["fix"] or "Restart the listener from UI or POST /voice/listener-start."
+
+        reason = None if settings.listener_enabled else "listener_disabled"
 
         return {
             "ok": True,
@@ -318,12 +309,17 @@ class VoiceListener:
                 "autostart": settings.listener_autostart,
                 "running": running,
                 "state": display_state,
+                "assistant_name": settings.assistant_name,
+                "wake_words": list(settings.wake_words),
                 "device_id": str(self.device_id),
                 "device_name": self.device_name,
                 "wake_word_enabled": self.wake_word_enabled,
                 "clap_enabled": self.clap_enabled,
                 "last_trigger": self.last_trigger,
                 "last_transcript": self.last_transcript,
+                "last_heard_text": self.last_heard_text,
+                "last_wake_word": self.last_wake_word,
+                "last_command_text": self.last_command_text,
                 "last_ignored_reason": self.last_ignored_reason,
                 "speaking": is_speaking_now(),
                 "cooldown_until": datetime.fromtimestamp(self.cooldown_until).isoformat() if self.cooldown_until > 0 else None,
@@ -343,7 +339,7 @@ class VoiceListener:
     def run_loop(self) -> None:
         """The continuous main loop running on the background thread."""
         settings = get_settings()
-        self.state = "listening_for_trigger"
+        self.state = "listening_for_wake_word"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
         while not self._stop_event.is_set():
@@ -377,7 +373,7 @@ class VoiceListener:
                 continue
             else:
                 if self.state in {"speaking", "cooldown"}:
-                    self.state = "listening_for_trigger"
+                    self.state = "listening_for_wake_word"
                     event_bus.emit("voice.listener.state", {"state": self.state})
 
             # Check if self-echo loop triggered in anti_echo
@@ -402,7 +398,7 @@ class VoiceListener:
     def process_audio_window(self) -> None:
         """Captures a short window of audio to detect clap or wake words."""
         settings = get_settings()
-        self.metrics["audio_windows"] += 1
+        self._inc_metric("audio_windows")
 
         # Wake word requires 1.5s window, clap can be checked in the same window
         duration = 1.5
@@ -415,7 +411,7 @@ class VoiceListener:
             )
         except VoiceDependencyError as ex:
             logger.error("[LISTENER] Audio capture failed: %s", ex)
-            self.metrics["no_audio_events"] += 1
+            self._inc_metric("no_audio_events")
             time.sleep(0.5)
             return
         except Exception as ex:
@@ -432,53 +428,80 @@ class VoiceListener:
         self.detect_trigger(capture)
 
     def detect_trigger(self, capture: Any) -> None:
-        """Determines if a clap or wake-word was received."""
+        """Transcribes one short audio window and gates assistant calls by wake word."""
         settings = get_settings()
 
-        # 1. Clap detection
-        if self.clap_enabled:
-            if capture.peak > settings.clap_threshold:
-                logger.info("[LISTENER] Clap detected! peak=%.3f, threshold=%.3f", capture.peak, settings.clap_threshold)
-                self.last_trigger = "clap"
-                self._trigger_timestamps.append(time.time())
-                self.metrics["triggers"] += 1
-                self.state = "triggered"
-                event_bus.emit("voice.listener.state", {"state": self.state})
-                self.record_command_after_trigger()
-                return
-
-        # 2. Wake-word detection via STT transcription
-        if self.wake_word_enabled:
-            self.state = "transcribing"
+        if not self.wake_word_enabled:
+            self.last_ignored_reason = "wake_word_disabled"
+            self.state = "listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
+            return
 
-            stt = STTService(settings)
-            stt_res = stt.transcribe(capture)
-            transcript = stt_res.get("transcript")
+        self.state = "transcribing"
+        event_bus.emit("voice.listener.state", {"state": self.state})
 
-            if transcript:
-                norm_t = transcript.lower()
-                wake_keywords = [w.strip().lower() for w in settings.wake_words.split(",")]
-
-                # Check for direct matches or substrings
-                matched_word = None
-                for kw in wake_keywords:
-                    if kw in norm_t:
-                        matched_word = kw
-                        break
-
-                if matched_word:
-                    logger.info("[LISTENER] Wake word '%s' detected in transcript: '%s'", matched_word, transcript)
-                    self.last_trigger = f"wake_word:{matched_word}"
-                    self._trigger_timestamps.append(time.time())
-                    self.metrics["triggers"] += 1
-                    self.state = "triggered"
-                    event_bus.emit("voice.listener.state", {"state": self.state})
-                    self.record_command_after_trigger()
-                    return
-
-            self.state = "listening_for_trigger"
+        stt = STTService(settings)
+        stt_res = stt.transcribe(capture)
+        transcript = (stt_res.get("transcript") or "").strip()
+        if not transcript:
+            self.state = "listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
+            return
+
+        self._inc_metric("transcripts")
+        self.last_transcript = transcript
+        self.last_heard_text = transcript
+
+        guard_res = should_ignore_transcript(transcript)
+        if guard_res["ignore"]:
+            self.last_ignored_reason = guard_res["reason"] or "self_audio"
+            if guard_res["self_echo_blocked"]:
+                self._inc_metric("ignored_self_audio")
+                self._inc_metric("self_echo_blocks")
+            if guard_res["reason"] == "speaking_active":
+                self._inc_metric("cooldown_blocks")
+            if guard_res["stop_listener"]:
+                self.block("self_echo_detected", guard_res.get("fix") or SELF_ECHO_FIX, guard_res.get("fix") or SELF_ECHO_FIX)
+            else:
+                self.enter_cooldown("ignored_self_audio")
+            return
+
+        wake = extract_wake_command(transcript, list(settings.wake_words))
+        self.last_ignored_reason = wake["reason"]
+        if not wake["triggered"]:
+            self._inc_metric("ignored_no_wake_word")
+            self.state = "listening_for_wake_word"
+            event_bus.emit("voice.listener.state", {"state": self.state})
+            return
+
+        self.last_wake_word = wake["wake_word"] or ""
+        self.last_command_text = wake["command_text"]
+        self.last_trigger = f"wake_word:{self.last_wake_word}"
+        self._trigger_timestamps.append(time.time())
+        self._inc_metric("triggers")
+        self._inc_metric("wake_triggers")
+        self.state = "wake_word_detected"
+        event_bus.emit("voice.listener.state", {"state": self.state})
+
+        if not self.last_command_text:
+            self.acknowledge_empty_wake()
+            return
+
+        self.send_to_assistant(self.last_command_text)
+
+    def acknowledge_empty_wake(self) -> None:
+        """Reply briefly to a bare wake word without sending an AI request."""
+        settings = get_settings()
+        address = settings.address()
+        reply = f"Да, {address}?" if address else "Да?"
+        try:
+            self.state = "speaking"
+            event_bus.emit("voice.listener.state", {"state": self.state})
+            TTSService(settings).speak(reply, blocking=True)
+        except Exception as exc:
+            logger.warning("[LISTENER] Empty wake acknowledgement failed: %s", exc)
+        finally:
+            self.enter_cooldown("empty_wake_word")
 
     def record_command_after_trigger(self) -> None:
         """Triggers long command recording after finding a wake trigger."""
@@ -498,14 +521,14 @@ class VoiceListener:
             )
         except Exception as e:
             logger.error("[LISTENER] Failed to capture command audio: %s", e)
-            self.state = "listening_for_trigger"
+            self.state = "listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
         # Handle empty/silent command recording
         if capture.rms < settings.min_rms_threshold:
             logger.warning("[LISTENER] Captured command was completely silent.")
-            self.state = "listening_for_trigger"
+            self.state = "listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
@@ -523,7 +546,7 @@ class VoiceListener:
 
         if not transcript:
             logger.info("[LISTENER] STT returned empty transcript for command.")
-            self.state = "listening_for_trigger"
+            self.state = "listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
@@ -598,13 +621,14 @@ class VoiceListener:
 
         settings = get_settings()
         cooldown_sec = float(settings.cooldown_ms) / 1000.0
+        self._inc_metric("cooldown_blocks")
         self.cooldown_until = time.time() + cooldown_sec
         logger.info("[LISTENER] Cooldown activated for %.1fs (Reason: %s)", cooldown_sec, reason)
         event_bus.emit("listener.cooldown.started", {"duration_ms": settings.cooldown_ms})
 
         time.sleep(cooldown_sec)
 
-        self.state = "listening_for_trigger"
+        self.state = "listening_for_wake_word"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
 

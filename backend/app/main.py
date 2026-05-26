@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
                 voice_listener.start(
                     device_id=settings.listener_device_id,
                     wake_word_enabled=True,
-                    clap_enabled=True,
+                    clap_enabled=False,
                     force_start=True,
                 )
                 logger.info("Voice listener started safely on startup.")
@@ -161,6 +161,13 @@ class SettingsPatchRequest(BaseModel):
     ai_fallback: str | None = None
     ai_allow_local_fallback: bool | None = None
     voice_profile: str | None = None
+    assistant_name: str | None = None
+    assistant_display_name: str | None = None
+    assistant_address_style: str | None = None
+    wake_words: list[str] | str | None = None
+    voice_profile_id: str | None = None
+    voice_profiles: list[dict[str, Any]] | None = None
+    voice_tone: str | None = None
     voice_wake_enabled: bool | None = None
     clap_enabled: bool | None = None
     runtime_mode: str | None = None
@@ -198,7 +205,7 @@ class RecordCommandRequest(BaseModel):
 
 class ListenerRequest(BaseModel):
     wake_word: bool = True
-    clap: bool = True
+    clap: bool = False
     device_id: str = "default"
 
 
@@ -211,7 +218,7 @@ class CalibrateMicRequest(BaseModel):
 class ListenerStartRequest(BaseModel):
     device_id: str = "default"
     wake_word: bool = True
-    clap: bool = True
+    clap: bool = False
 
 
 class SayRequest(BaseModel):
@@ -333,7 +340,7 @@ def voice_tts_reset() -> dict[str, Any]:
 def debug_voice_provider_status() -> dict[str, Any]:
     settings = get_settings()
     env_status = env_debug_status(settings)
-    require_fish = bool(settings.tts_require_fish_audio or settings.voice_profile.strip().lower() == "jarvis style")
+    require_fish = bool(settings.tts_require_fish_audio or settings.selected_voice_provider() == "fish_audio" or settings.voice_profile.strip().lower() == "jarvis style")
     fish_key_present = bool(settings.fish_audio_api_key)
     fish_voice_present = bool(settings.fish_audio_voice_id)
     selected_provider = "fish_audio" if fish_key_present and fish_voice_present else "text_only"
@@ -349,6 +356,8 @@ def debug_voice_provider_status() -> dict[str, Any]:
             "env_loaded": bool(env_status.get("env_loaded")),
             "paths_loaded": env_status.get("paths_loaded") or env_status.get("env_paths_loaded") or [],
             "voice_profile": settings.voice_profile,
+            "voice_profile_id": settings.voice_profile_id,
+            "voice_tone": settings.effective_voice_tone(),
             "tts_primary": "fish_audio" if require_fish else settings.tts_primary,
             "require_fish_audio": require_fish,
             "fallback_enabled": bool(settings.tts_fallback_enabled and not require_fish),
@@ -370,7 +379,7 @@ def debug_voice_provider_status() -> dict[str, Any]:
 
 @app.get("/debug/local-voice-status")
 def debug_local_voice_status() -> dict[str, Any]:
-    from app.voice.local_providers import GPTSoVITSLocalProvider, PiperLocalProvider, XTTSLocalProvider
+    from app.voice.local_providers import GPTSoVITSLocalProvider, PiperLocalProvider, RVCConverterProvider, XTTSLocalProvider
 
     settings = get_settings()
     fish_key_present = bool(settings.fish_audio_api_key)
@@ -386,6 +395,7 @@ def debug_local_voice_status() -> dict[str, Any]:
             "piper_local": PiperLocalProvider(settings).status().to_dict(),
             "xtts_local": XTTSLocalProvider(settings).status().to_dict(),
             "gpt_sovits_local": GPTSoVITSLocalProvider(settings).status().to_dict(),
+            "rvc_converter": RVCConverterProvider(settings).status().to_dict(),
         }
     )
 
@@ -1016,35 +1026,6 @@ def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -
 
 @app.get("/voice/listener-status")
 def voice_listener_status() -> dict[str, Any]:
-    settings = get_settings()
-    listener_running = voice_listener._thread is not None and voice_listener._thread.is_alive()
-    if not settings.listener_enabled and not listener_running:
-        return {
-            "ok": True,
-            "data": {
-                "enabled": False,
-                "autostart": settings.listener_autostart,
-                "running": False,
-                "state": "stopped",
-                "device_id": str(settings.listener_device_id),
-                "device_name": None,
-                "wake_word_enabled": False,
-                "clap_enabled": False,
-                "last_trigger": None,
-                "last_transcript": None,
-                "last_ignored_reason": None,
-                "speaking": False,
-                "cooldown_until": None,
-                "metrics": {},
-                "safe_to_start": False,
-                "reason": "listener disabled by default",
-                "last_error_type": None,
-                "last_error": None,
-                "fix": None,
-                "errors": [],
-                "warnings": []
-            }
-        }
     status_data = voice_listener.status()
     return make_listener_response(status_data["ok"])
 
@@ -1054,9 +1035,10 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
     patch_settings(
         {
             "listener_enabled": True,
+            "listener_autostart": True,
             "listener_device_id": request.device_id,
             "voice_wake_enabled": request.wake_word,
-            "clap_enabled": request.clap,
+            "clap_enabled": False,
         }
     )
     gate_res = voice_listener.check_safe_start(request.device_id)
@@ -1080,7 +1062,7 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
     result = voice_listener.start(
         device_id=request.device_id,
         wake_word_enabled=request.wake_word,
-        clap_enabled=request.clap,
+        clap_enabled=False,
         force_start=True
     )
     return make_listener_response(result.get("ok", True))
@@ -1089,7 +1071,7 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
 @app.post("/voice/listener-stop")
 def voice_listener_stop_post() -> dict[str, Any]:
     result = voice_listener.stop()
-    patch_settings({"listener_enabled": False})
+    patch_settings({"listener_enabled": False, "listener_autostart": False})
     return make_listener_response(result.get("ok", True))
 
 
@@ -1171,7 +1153,7 @@ def voice_start_listener(request: ListenerStartRequest) -> dict[str, Any]:
 @app.post("/voice/stop-listener")
 def voice_stop_listener() -> dict[str, Any]:
     result = voice_listener.stop()
-    patch_settings({"listener_enabled": False})
+    patch_settings({"listener_enabled": False, "listener_autostart": False})
     event_bus.emit("voice.listener.stopped", result.get("data", {}))
     return make_listener_response(result.get("ok", True))
 

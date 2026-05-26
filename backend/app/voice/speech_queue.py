@@ -59,6 +59,8 @@ class SpeechQueue:
             if self._current_task:
                 logger.info("[QUEUE] Cancelling active task command_id=%s", self._current_task.command_id)
                 event_bus.emit("assistant.tts.cancelled", {"command_id": self._current_task.command_id})
+                self._last_job_status = "cancelled"
+                self._last_provider = self._last_provider or "text_only"
                 self._current_task = None
 
         # Reset cancel event for the new task
@@ -87,6 +89,31 @@ class SpeechQueue:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            now = time.perf_counter()
+            stuck_jobs: list[dict[str, Any]] = []
+            if (
+                self._last_job_id
+                and self._last_job_status == "queued"
+                and self._last_job_created_at is not None
+                and now - self._last_job_created_at > 10
+                and (not self._worker_thread or not self._worker_thread.is_alive())
+            ):
+                self._last_job_status = "failed"
+                self._last_error_type = "tts_worker_not_active"
+                self._last_error = "TTS job was queued longer than 10 seconds without an active worker."
+            if (
+                self._last_job_id
+                and self._last_job_status == "queued"
+                and self._last_job_created_at is not None
+                and now - self._last_job_created_at > 10
+            ):
+                stuck_jobs.append(
+                    {
+                        "job_id": self._last_job_id,
+                        "status": self._last_job_status,
+                        "age_seconds": round(now - self._last_job_created_at, 3),
+                    }
+                )
             last_result = dict(self._last_result) if self._last_result else None
             if last_result and "audio" in last_result:
                 last_result["audio"] = None
@@ -95,7 +122,7 @@ class SpeechQueue:
                 "last_job_status": self._last_job_status,
                 "last_job_created_at": self._last_job_created_at,
                 "last_job_age_seconds": (
-                    time.perf_counter() - self._last_job_created_at
+                    now - self._last_job_created_at
                     if self._last_job_created_at is not None and self._last_job_status in {"queued", "started"}
                     else 0
                 ),
@@ -107,6 +134,7 @@ class SpeechQueue:
                 "queue_size": self._queue.qsize(),
                 "active_job_id": self._current_task.command_id if self._current_task else None,
                 "current_job_id": self._current_task.command_id if self._current_task else None,
+                "stuck_jobs": stuck_jobs,
             }
 
     def reset(self) -> dict[str, Any]:
@@ -153,6 +181,8 @@ class SpeechQueue:
             logger.info("[QUEUE] Task command_id=%s was cancelled before processing", task.command_id)
             event_bus.emit("assistant.tts.cancelled", {"command_id": task.command_id})
             with self._lock:
+                self._last_job_status = "cancelled"
+                self._last_provider = self._last_provider or "text_only"
                 if self._current_task == task:
                     self._current_task = None
             return
@@ -173,16 +203,24 @@ class SpeechQueue:
             if self._cancel_event.is_set():
                 logger.info("[QUEUE] Task command_id=%s was cancelled/interrupted during playback", task.command_id)
                 event_bus.emit("assistant.tts.cancelled", {"command_id": task.command_id})
+                with self._lock:
+                    self._last_job_status = "cancelled"
+                    self._last_provider = result.get("provider") or "text_only"
+                    self._last_result = {**result, "status": "cancelled"}
                 return
 
             latency_ms = result.get("latency_ms") or int((time.perf_counter() - started) * 1000)
             if result.get("ok"):
+                provider = result.get("provider") or "text_only"
+                final_status = "played" if result.get("played") else "text_only"
+                if provider == "text_only":
+                    final_status = "text_only"
                 with self._lock:
-                    self._last_job_status = "played" if result.get("played") else "generated"
-                    self._last_provider = result.get("provider") or "text_only"
+                    self._last_job_status = final_status
+                    self._last_provider = provider
                     self._last_error_type = None
                     self._last_error = None
-                    self._last_result = dict(result)
+                    self._last_result = {**result, "status": final_status}
                     if result.get("played"):
                         self._last_played_at = time.time()
                 logger.info("[QUEUE] TTS task command_id=%s completed successfully in %sms", task.command_id, latency_ms)
@@ -192,8 +230,8 @@ class SpeechQueue:
                         "job_id": task.command_id,
                         "command_id": task.command_id,
                         "route": task.route,
-                        "provider": result.get("provider"),
-                        "status": result.get("status"),
+                        "provider": provider,
+                        "status": final_status,
                         "audio_bytes": result.get("audio_bytes"),
                         "latency_ms": latency_ms,
                     },
@@ -215,21 +253,23 @@ class SpeechQueue:
                     {
                         "command_id": task.command_id,
                         "route": task.route,
-                        "provider": result.get("provider"),
-                        "status": result.get("status"),
+                        "provider": provider,
+                        "status": final_status,
                         "played": bool(result.get("played")),
                         "error": None,
                         "latency_ms": latency_ms,
                     },
                 )
             else:
+                error_type = result.get("error_type") or result.get("status") or "tts_provider_error"
+                error_message = result.get("error") or result.get("error_message") or "TTS provider failed."
                 with self._lock:
                     self._last_job_status = "failed"
                     self._last_provider = result.get("provider") or "text_only"
-                    self._last_error_type = result.get("error_type") or result.get("status")
-                    self._last_error = result.get("error") or result.get("error_message")
-                    self._last_result = dict(result)
-                logger.warning("[QUEUE] TTS task command_id=%s failed: %s", task.command_id, result.get("error"))
+                    self._last_error_type = error_type
+                    self._last_error = error_message
+                    self._last_result = {**result, "status": "failed", "error_type": error_type, "error": error_message}
+                logger.warning("[QUEUE] TTS task command_id=%s failed: %s", task.command_id, error_message)
                 event_bus.emit(
                     "tts.failed",
                     {
@@ -238,8 +278,8 @@ class SpeechQueue:
                         "route": task.route,
                         "provider": result.get("provider") or "text_only",
                         "status": "failed",
-                        "error_type": result.get("error_type") or result.get("status"),
-                        "error": result.get("error") or result.get("error_message"),
+                        "error_type": error_type,
+                        "error": error_message,
                         "latency_ms": latency_ms,
                     },
                 )
@@ -251,7 +291,7 @@ class SpeechQueue:
                         "provider": result.get("provider"),
                         "status": result.get("status"),
                         "played": False,
-                        "error": result.get("error"),
+                        "error": error_message,
                         "latency_ms": latency_ms,
                     },
                 )

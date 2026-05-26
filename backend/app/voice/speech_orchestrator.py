@@ -211,12 +211,16 @@ class SpeechOrchestrator:
         global _LAST_TTS_ERROR, _LAST_TTS_ERROR_TYPE, _LAST_PROVIDER_USED
         logger = _speech_logger()
 
-        safe_text = (text or "").strip() or "Сэр, слушаю вас."
-        safe_text = safe_text[:500]
+        address = self.settings.address()
+        safe_text = (text or "").strip() or (f"Слушаю, {address}." if address else "Слушаю.")
+        safe_text = self._apply_tone(safe_text)[:500]
 
         started = time.perf_counter()
         voice_locked = self._fish_required()
-        primary = "fish_audio" if voice_locked else (self.settings.tts_primary or "fish_audio")
+        selected_provider = self.settings.selected_voice_provider()
+        primary = selected_provider if selected_provider else ("fish_audio" if voice_locked else (self.settings.tts_primary or "fish_audio"))
+        if primary == "text_only":
+            return self._text_only(safe_text, "Selected voice profile is text_only.", started, None)
 
         logger.info("[SPEECH] Primary TTS requested: %s", primary)
 
@@ -400,6 +404,19 @@ class SpeechOrchestrator:
             result["error_type"] = _LAST_TTS_ERROR_TYPE or "fish_api_error"
         return result
 
+    def _apply_tone(self, text: str) -> str:
+        compact = " ".join((text or "").split())
+        tone = self.settings.effective_voice_tone()
+        if tone == "fast":
+            return compact[:180]
+        if tone == "serious":
+            return compact[:260]
+        if tone == "friendly":
+            return compact[:320]
+        if tone == "cinematic":
+            return compact[:360]
+        return compact[:300]
+
     def say_greeting(self, text: str) -> dict[str, Any]:
         return self.say(text)
 
@@ -414,7 +431,7 @@ class SpeechOrchestrator:
 
     def status(self) -> dict[str, Any]:
         voice_locked = self._fish_required()
-        primary = "fish_audio" if voice_locked else (self.settings.tts_primary or "fish_audio")
+        primary = self.settings.selected_voice_provider() or ("fish_audio" if voice_locked else (self.settings.tts_primary or "fish_audio"))
         fallback_enabled = self.settings.tts_fallback_enabled and not voice_locked
         
         fallback_used = False

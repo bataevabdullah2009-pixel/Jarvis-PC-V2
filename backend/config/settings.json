@@ -10,16 +10,52 @@
   "workspace_project_path": "C:\\Jarvis\\jarvis-car",
   "open_terminal_with_workspace": false,
   "voice_profile": "Jarvis style",
+  "assistant_name": "Джарвис",
+  "assistant_display_name": "JARVIS",
+  "assistant_address_style": "сэр",
+  "wake_words": [
+    "джарвис",
+    "чарли",
+    "jarvis"
+  ],
+  "voice_profile_id": "jarvis_main",
+  "voice_profiles": [
+    {
+      "id": "jarvis_main",
+      "name": "Jarvis Main",
+      "provider": "fish_audio",
+      "voice_id": "",
+      "tone": "calm",
+      "enabled": true
+    },
+    {
+      "id": "jarvis_deep",
+      "name": "Jarvis Deep",
+      "provider": "fish_audio",
+      "voice_id": "",
+      "tone": "serious",
+      "enabled": true
+    },
+    {
+      "id": "assistant_alt",
+      "name": "Assistant Alt",
+      "provider": "fish_audio",
+      "voice_id": "",
+      "tone": "friendly",
+      "enabled": true
+    }
+  ],
+  "voice_tone": "calm",
   "offline_mode": false,
   "vosk_model_path": "backend\\models\\vosk-model-small-ru-0.22",
-  "clap_enabled": true,
+  "clap_enabled": false,
   "voice_volume": 82,
   "voice_wake_enabled": true,
   "runtime_mode": "online",
   "autostart_enabled": true,
-  "ai_fallback": "openrouter",
+  "ai_fallback": "groq",
   "ai_primary": "groq",
-  "listener_enabled": true,
-  "listener_autostart": true,
+  "listener_enabled": false,
+  "listener_autostart": false,
   "listener_device_id": "default"
 }

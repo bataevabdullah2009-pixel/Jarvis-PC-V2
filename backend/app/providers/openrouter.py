@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import requests
 
-from app.core.config import LOG_DIR, Settings
+from app.core.config import LOG_DIR, Settings, tone_instruction
 
 
 CONNECT_TIMEOUT_SECONDS = 10.0
@@ -207,15 +207,26 @@ class OpenRouterPlanner:
         route = context.get("route")
 
         # Dynamic prompt engineering depending on source/route
-        sys_prompt = SYSTEM_PROMPT
+        address = self.settings.address()
+        identity_prompt = (
+            f"\nТвое имя: {self.settings.assistant_name}. "
+            f"Отображаемое имя: {self.settings.assistant_display_name}. "
+            f"Обращение к пользователю: {address or 'без обращения'}. "
+            f"Тон ответа: {tone_instruction(self.settings.effective_voice_tone())}."
+        )
+        sys_prompt = SYSTEM_PROMPT + identity_prompt
         max_tokens = self.settings.openrouter_max_tokens
         temperature = self.settings.openrouter_temperature
 
         if source == "voice" or route == "voice":
             sys_prompt += "\nОТВЕЧАЙ МАКСИМАЛЬНО КРАТКО (не более 1 предложения, до 150 символов), так как твой ответ будет озвучен голосом."
             max_tokens = min(max_tokens, 80)
+            if self.settings.effective_voice_tone() == "fast":
+                max_tokens = min(max_tokens, 45)
         elif source in {"hud", "manual"}:
             sys_prompt += "\nОтвечай кратко, но полезно (1-3 предложения, до 300 символов)."
+            if self.settings.effective_voice_tone() == "fast":
+                max_tokens = min(max_tokens, 70)
 
         payload = {
             "model": self.settings.openrouter_model,

@@ -294,8 +294,8 @@ export function MinimalUI({
       <section className="workspace">
         <header className="app-header">
           <div>
-            <p className="eyebrow">JARVIS PC V2</p>
-            <h1>Minimal Assistant</h1>
+            <p className="eyebrow">{state.settings?.assistant_display_name ?? "JARVIS"} PC V2</p>
+            <h1>{state.settings?.assistant_name ?? "Джарвис"}</h1>
           </div>
           <div className="header-status">
             <span>{state.license?.message ?? "Лицензия отключена"}</span>
@@ -315,7 +315,7 @@ export function MinimalUI({
               </div>
 
               <div className="reply-card">
-                <span>JARVIS</span>
+                <span>{state.settings?.assistant_display_name ?? "JARVIS"}</span>
                 <p>{state.lastResult?.response_text ?? "Готов к команде, сэр."}</p>
                 
                 {state.lastResult && (
@@ -436,6 +436,8 @@ export function MinimalUI({
              state={state}
              onTestMicrophone={onTestMicrophone}
              onTestVoice={onTestVoice}
+             onPatchSettings={onPatchSettings}
+             onRefresh={onRefresh}
              selectedDevice={selectedDevice}
              onDeviceChange={handleDeviceChange}
            />
@@ -507,9 +509,13 @@ function ControlPanel({
   const listener = state.listenerStatus;
   const isRunning = isBackendAvailable ? Boolean(listener?.running) : false;
   const listenerState = isBackendAvailable ? (listener?.state || "stopped") : "backend_unavailable";
-  const listenerReason = listener?.last_error_type || listener?.reason || listener?.failed_check || listener?.last_error || "неизвестная причина";
+  const assistantName = settings?.assistant_name || listener?.assistant_name || "Джарвис";
+  const wakeWords = Array.isArray(settings?.wake_words)
+    ? settings.wake_words
+    : String(settings?.wake_words || "джарвис,чарли,jarvis").split(",").map((word) => word.trim()).filter(Boolean);
+  const listenerReason = listener?.last_error_type || listener?.reason || listener?.failed_check || listener?.last_error || "причина не указана";
   
-  let listenerStatusLabel = "Live listener отключен";
+  let listenerStatusLabel = "Автослушание отключено";
   let statusColor = "rgba(255, 255, 255, 0.4)";
   let dotAnimation = false;
   
@@ -517,32 +523,32 @@ function ControlPanel({
     listenerStatusLabel = "Backend не запущен. Запустите START_JARVIS.bat";
     statusColor = "#FF3333";
   } else if (listenerState === "blocked") {
-    listenerStatusLabel = `Live listener заблокирован: ${listenerReason}`;
+    listenerStatusLabel = `Автослушание заблокировано: ${listenerReason}`;
     statusColor = "#FF3333";
   } else if (isRunning) {
-    if (listenerState === "listening_for_trigger" || listenerState === "idle") {
-      listenerStatusLabel = "Слушаю 24/7";
+    if (listenerState === "listening_for_wake_word" || listenerState === "starting") {
+      listenerStatusLabel = `Слушаю 24/7: скажите '${wakeWords[0] || assistantName}'`;
       statusColor = "#00FF66";
       dotAnimation = true;
-    } else if (listenerState === "triggered") {
-      listenerStatusLabel = "Ожидаю wake word";
+    } else if (listenerState === "wake_word_detected") {
+      listenerStatusLabel = "Wake word услышан";
       statusColor = "#FFE054";
     } else if (listenerState === "recording_command") {
       listenerStatusLabel = "Записываю команду";
       statusColor = "#FF3366";
       dotAnimation = true;
     } else if (listenerState === "speaking") {
-      listenerStatusLabel = "Джарвис говорит — микрофон заблокирован";
+      listenerStatusLabel = `${assistantName} говорит — микрофон заблокирован`;
       statusColor = "#00B8FF";
     } else if (listenerState === "cooldown") {
-      listenerStatusLabel = "Cooldown";
+      listenerStatusLabel = "Пауза после ответа";
       statusColor = "#FFE054";
     }
   } else if (listenerState === "error") {
-    listenerStatusLabel = `Live listener заблокирован: ${listenerReason}`;
+    listenerStatusLabel = `Автослушание заблокировано: ${listenerReason}`;
     statusColor = "#FF3333";
   } else if (isBackendAvailable && settings?.listener_enabled && settings?.listener_autostart && !isRunning) {
-    listenerStatusLabel = `Live listener не стартовал: ${listenerReason}`;
+    listenerStatusLabel = "BUG: listener stopped without reason";
     statusColor = "#FF3333";
   }
   
@@ -551,22 +557,20 @@ function ControlPanel({
     statusColor = "#FF3333";
   }
 
-  const handleToggleWakeWord = async (val: boolean) => {
-    await onPatchSettings({ voice_wake_enabled: val });
-    if (val || settings?.clap_enabled) {
-      await api.listenerStart(selectedDevice, val, Boolean(settings?.clap_enabled));
+  const handleToggleAutolisten = async (value: boolean) => {
+    await onPatchSettings({ listener_enabled: value, listener_autostart: value, voice_wake_enabled: value, clap_enabled: false });
+    if (value) {
+      await api.listenerStart(selectedDevice, true, false);
     } else {
       await api.listenerStop();
     }
     setTimeout(onRefresh, 300);
   };
-  
-  const handleToggleClap = async (val: boolean) => {
-    await onPatchSettings({ clap_enabled: val });
-    if (settings?.voice_wake_enabled || val) {
-      await api.listenerStart(selectedDevice, Boolean(settings?.voice_wake_enabled), val);
-    } else {
-      await api.listenerStop();
+
+  const handlePrimaryMic = async () => {
+    await onPatchSettings({ listener_device_id: selectedDevice });
+    if (settings?.listener_enabled && settings?.listener_autostart) {
+      await api.listenerStart(selectedDevice, true, false);
     }
     setTimeout(onRefresh, 300);
   };
@@ -597,14 +601,12 @@ function ControlPanel({
           animation: dotAnimation ? "pulse 1.5s infinite" : "none"
         }} />
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.4)" }}>Статус Live Listener</span>
+          <span style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.4)" }}>Статус автослушания</span>
           <strong style={{ fontSize: "0.85rem", color: "#FFF" }}>{listenerStatusLabel}</strong>
         </div>
       </div>
 
-      <ToggleRow label="Голосовое пробуждение" checked={Boolean(settings?.voice_wake_enabled)} onChange={handleToggleWakeWord} />
-      <ToggleRow label="Хлопок" checked={Boolean(settings?.clap_enabled)} onChange={handleToggleClap} />
-      <ToggleRow label="Автопрослушивание" checked={Boolean(settings?.listener_autostart ?? true)} onChange={(value) => onPatchSettings({ listener_autostart: value, listener_enabled: value })} />
+      <ToggleRow label="Автослушание 24/7" checked={Boolean(settings?.listener_enabled && settings?.listener_autostart)} onChange={handleToggleAutolisten} />
       <label className="field-row">
         <span>Микрофон</span>
         <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)}>
@@ -619,7 +621,7 @@ function ControlPanel({
           })}
         </select>
       </label>
-      <button className="secondary-button" type="button" onClick={() => onPatchSettings({ listener_device_id: selectedDevice })}>
+      <button className="secondary-button" type="button" onClick={handlePrimaryMic}>
         <Mic size={16} />
         Сделать этот микрофон основным
       </button>
@@ -922,20 +924,55 @@ function VoicesPanel({
   state,
   onTestMicrophone,
   onTestVoice,
+  onPatchSettings,
+  onRefresh,
   selectedDevice,
   onDeviceChange
 }: {
   state: AppState;
   onTestMicrophone: Props["onTestMicrophone"];
   onTestVoice: Props["onTestVoice"];
+  onPatchSettings: Props["onPatchSettings"];
+  onRefresh: Props["onRefresh"];
   selectedDevice: string;
   onDeviceChange: (id: string) => void;
 }) {
+  const profiles = state.settings?.voice_profiles ?? [];
+  const selectedProfileId = state.settings?.voice_profile_id ?? profiles[0]?.id ?? "jarvis_main";
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0];
+  const maskVoiceId = (value?: string) => {
+    const text = value || "";
+    if (!text) return "";
+    if (text.includes("...")) return text;
+    return text.length <= 8 ? "*".repeat(text.length) : `${text.slice(0, 4)}...${text.slice(-4)}`;
+  };
+  const saveVoiceProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const profileId = String(form.get("profile_id") || selectedProfileId);
+    const nextProfiles = profiles.map((profile) => {
+      if (profile.id !== profileId) return profile;
+      const rawVoiceId = String(form.get("voice_id") || profile.voice_id || "");
+      return {
+        ...profile,
+        name: String(form.get("name") || profile.name),
+        provider: String(form.get("provider") || profile.provider),
+        voice_id: rawVoiceId.includes("...") ? profile.voice_id || "" : rawVoiceId,
+        tone: String(form.get("tone") || profile.tone),
+        enabled: true
+      };
+    });
+    await onPatchSettings({ voice_profile_id: profileId, voice_profiles: nextProfiles, voice_tone: String(form.get("tone") || "calm") });
+    if (state.settings?.listener_enabled && state.settings.listener_autostart) {
+      await api.listenerStart(state.settings.listener_device_id || "default", true, false);
+    }
+    setTimeout(onRefresh, 300);
+  };
   return (
     <section className="panel page-panel">
       <div className="panel-heading">
         <Headphones size={18} />
-        <h2>Голос и микрофон</h2>
+        <h2>Голоса и микрофон</h2>
       </div>
       <div className="status-cards">
         <InfoCard label="sounddevice" value={state.voice?.sounddevice.available ? "installed" : "missing"} />
@@ -944,6 +981,62 @@ function VoicesPanel({
         <InfoCard label="TTS" value={state.ttsStatus?.primary ?? state.voice?.tts.mode ?? "text only"} />
         <InfoCard label="Jarvis voice" value={state.settings?.fish_audio_voice_configured ? "Fish Audio voice id" : "Fish Audio unavailable"} />
       </div>
+      <form className="settings-section" onSubmit={saveVoiceProfile}>
+        <div className="panel-heading no-margin">
+          <Volume2 size={18} />
+          <h3>Голоса</h3>
+        </div>
+        <label className="field-row">
+          <span>Голос ассистента</span>
+          <select name="profile_id" defaultValue={selectedProfileId} onChange={(event) => onPatchSettings({ voice_profile_id: event.target.value })}>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.name} ({profile.tone})</option>
+            ))}
+          </select>
+        </label>
+        <label className="field-row">
+          <span>name</span>
+          <input name="name" defaultValue={selectedProfile?.name ?? "Jarvis Main"} />
+        </label>
+        <label className="field-row">
+          <span>provider</span>
+          <select name="provider" defaultValue={selectedProfile?.provider ?? "fish_audio"}>
+            <option value="fish_audio">fish_audio</option>
+            <option value="piper_local">piper_local</option>
+            <option value="xtts_local">xtts_local</option>
+            <option value="gpt_sovits_local">gpt_sovits_local</option>
+            <option value="rvc_converter">rvc_converter</option>
+            <option value="text_only">text_only</option>
+          </select>
+        </label>
+        <label className="field-row">
+          <span>voice_id</span>
+          <input name="voice_id" defaultValue={maskVoiceId(selectedProfile?.voice_id_masked || selectedProfile?.voice_id)} />
+        </label>
+        <label className="field-row">
+          <span>tone</span>
+          <select name="tone" defaultValue={selectedProfile?.tone ?? state.settings?.voice_tone ?? "calm"}>
+            <option value="calm">calm</option>
+            <option value="serious">serious</option>
+            <option value="fast">fast</option>
+            <option value="cinematic">cinematic</option>
+            <option value="friendly">friendly</option>
+          </select>
+        </label>
+        <div className="settings-list">
+          {profiles.map((profile) => (
+            <InfoCard key={profile.id} label={profile.name} value={`${profile.provider} / ${maskVoiceId(profile.voice_id_masked || profile.voice_id) || "voice_id missing"} / ${profile.tone}`} />
+          ))}
+        </div>
+        <button className="secondary-button" type="button" onClick={onTestVoice}>
+          <Volume2 size={17} />
+          Проверить голос
+        </button>
+        <button className="wide-button" type="submit">
+          <Save size={17} />
+          Сохранить голос
+        </button>
+      </form>
       <label className="field-row" style={{ marginTop: "16px", marginBottom: "16px" }}>
         <span>Выбор микрофона</span>
         <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)} style={{ width: "100%" }}>
@@ -992,6 +1085,22 @@ function SettingsPanel({
   const updateAppearance = (patch: Partial<typeof appearance>) => onLocalChange({ appearance: { ...appearance, ...patch } });
   const updateSounds = (patch: Partial<typeof sounds>) => onLocalChange({ sounds: { ...sounds, ...patch } });
   const testSound = (eventName: SoundEventName) => playSound(eventName);
+  const identityWakeWords = Array.isArray(state.settings?.wake_words)
+    ? state.settings?.wake_words.join(", ")
+    : state.settings?.wake_words || "джарвис, чарли, jarvis";
+  const saveIdentity = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await onPatchSettings({
+      assistant_name: String(form.get("assistant_name") || "Джарвис"),
+      assistant_display_name: String(form.get("assistant_display_name") || "JARVIS"),
+      assistant_address_style: String(form.get("assistant_address_style") || "сэр"),
+      wake_words: String(form.get("wake_words") || "джарвис,чарли,jarvis")
+    });
+    if (state.settings?.listener_enabled && state.settings.listener_autostart) {
+      await api.listenerStart(state.settings.listener_device_id || "default", true, false);
+    }
+  };
   return (
     <section className="panel page-panel">
       <ScenarioHeader title="Настройки" icon={<Settings size={18} />} savedText={savedText} />
@@ -1060,6 +1169,37 @@ function SettingsPanel({
         <InfoCard label="OpenRouter" value={state.settings?.openrouter_configured ? "configured" : "missing"} />
         <InfoCard label="Fish Audio" value={state.settings?.fish_audio_configured ? "configured" : "missing"} />
       </div>
+      <form className="settings-section" onSubmit={saveIdentity}>
+        <div className="panel-heading no-margin">
+          <Bot size={18} />
+          <h3>Личность ассистента</h3>
+        </div>
+        <label className="field-row">
+          <span>Имя ассистента</span>
+          <input name="assistant_name" defaultValue={state.settings?.assistant_name ?? "Джарвис"} />
+        </label>
+        <label className="field-row">
+          <span>Отображаемое имя</span>
+          <input name="assistant_display_name" defaultValue={state.settings?.assistant_display_name ?? "JARVIS"} />
+        </label>
+        <label className="field-row">
+          <span>Обращение к пользователю</span>
+          <select name="assistant_address_style" defaultValue={state.settings?.assistant_address_style ?? "сэр"}>
+            <option value="сэр">сэр</option>
+            <option value="брат">брат</option>
+            <option value="хозяин">хозяин</option>
+            <option value="без обращения">без обращения</option>
+          </select>
+        </label>
+        <label className="field-row">
+          <span>Wake words, через запятую</span>
+          <input name="wake_words" defaultValue={identityWakeWords} />
+        </label>
+        <button className="wide-button" type="submit">
+          <Save size={17} />
+          Сохранить личность
+        </button>
+      </form>
       <div className="settings-section">
         <div className="panel-heading no-margin">
           <Activity size={18} />

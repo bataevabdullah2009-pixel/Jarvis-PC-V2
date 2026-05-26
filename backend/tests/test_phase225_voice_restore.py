@@ -107,7 +107,7 @@ def test_listener_autostart_enabled_success(monkeypatch) -> None:
     result = voice_listener.start(device_id="default")
     data = result["data"]
     assert data["running"] is True
-    assert data["state"] in {"idle", "listening_for_trigger"}
+    assert data["state"] in {"idle", "listening_for_trigger", "listening_for_wake_word"}
     voice_listener.stop()
 
 
