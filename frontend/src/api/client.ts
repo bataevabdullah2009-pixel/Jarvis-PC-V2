@@ -206,6 +206,7 @@ export type SettingsData = {
   news_url: string;
   news_rss_url?: string;
   workspace_project_path: string;
+  open_terminal_with_workspace?: boolean;
   voice_profile: string;
   assistant_name?: string;
   assistant_display_name?: string;
@@ -604,14 +605,14 @@ export const api = {
       body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: durationSeconds ?? 3 })
     }),
   sttStatus: () => request<SttStatusData>("/voice/stt-status"),
-  listenerStatus: () => rawRequest<any>("/voice/listener-status"),
+  listenerStatus: () => request<any>("/voice/listener-status"),
   listenerStart: (deviceId: string, wakeWord: boolean, clap: boolean) =>
-    rawRequest<any>("/voice/listener-start", {
+    request<any>("/voice/listener-start", {
       method: "POST",
       body: JSON.stringify({ device_id: deviceId, wake_word: wakeWord, clap })
     }),
   listenerStop: () =>
-    rawRequest<any>("/voice/listener-stop", {
+    request<any>("/voice/listener-stop", {
       method: "POST"
     }),
   calibrateMic: (deviceId: string, silenceSeconds = 2, speechSeconds = 3) =>

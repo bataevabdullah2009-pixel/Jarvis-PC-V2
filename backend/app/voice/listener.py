@@ -108,13 +108,16 @@ class VoiceListener:
             }
         device_exists = bool(dev_res.get("ok", False))
 
-        # 3. Microphone test (heard_signal = True)
+        # 3. Microphone probe. Startup verifies capture access, not speech/noise
+        # in a tiny window; otherwise a quiet room blocks autolisten forever.
         microphone_ok = False
+        microphone_heard_signal = False
         if device_exists:
             try:
                 # Capture 0.2s duration (fast, non-blocking)
                 test_res = test_microphone(device_id=device_id, duration_seconds=0.2)
-                microphone_ok = bool(test_res.get("heard_signal", False))
+                microphone_ok = bool(test_res.get("ok", True))
+                microphone_heard_signal = bool(test_res.get("heard_signal", False))
             except Exception as e:
                 logger.error("[LISTENER] Microphone test exception: %s", e)
                 microphone_ok = False
@@ -138,6 +141,7 @@ class VoiceListener:
             "backend_alive": backend_alive,
             "device_exists": device_exists,
             "microphone_test": microphone_ok,
+            "microphone_heard_signal": microphone_heard_signal,
             "stt_configured": stt_configured,
             "anti_echo_available": anti_echo_available,
             "no_current_tts_speaking": no_current_tts_speaking,
@@ -153,7 +157,7 @@ class VoiceListener:
                 failed_check = "device_not_found"
                 fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
             elif not microphone_ok:
-                failed_check = "microphone_no_audio"
+                failed_check = "microphone_capture_failed"
                 fix = "Микрофон выбран, но сигнал не слышен. Проверьте чувствительность Windows, разрешение микрофона и выбранное устройство."
             elif not stt_configured:
                 offline = stt_conf.get("offline", {}) if isinstance(stt_conf, dict) else {}
@@ -182,7 +186,7 @@ class VoiceListener:
                 failed_check = "device_not_found"
                 fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
             elif not microphone_ok:
-                failed_check = "microphone_no_audio"
+                failed_check = "microphone_capture_failed"
                 fix = "Выберите другой микрофон или включите доступ Windows к микрофону"
             elif not stt_configured:
                 failed_check = "stt_not_configured"
@@ -221,6 +225,24 @@ class VoiceListener:
                 return self.status()
 
             self.device_name = dev_res["device_name"]
+
+            if clap_enabled:
+                try:
+                    clap_probe = test_microphone(device_id=device_id, duration_seconds=0.2)
+                    if not bool(clap_probe.get("heard_signal", False)):
+                        self.block(
+                            "microphone_no_audio",
+                            "Выберите другой микрофон или включите доступ Windows к микрофону",
+                            "Selected microphone did not return an audible signal for clap detection.",
+                        )
+                        return {"ok": False, "data": self.status()["data"]}
+                except Exception as exc:
+                    self.block(
+                        "microphone_capture_failed",
+                        "Выберите другой микрофон или включите доступ Windows к микрофону",
+                        str(exc),
+                    )
+                    return {"ok": False, "data": self.status()["data"]}
 
             # Safe Start Gate checks (always verified on starting)
             if not force_start:

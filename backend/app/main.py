@@ -176,6 +176,7 @@ class SettingsPatchRequest(BaseModel):
     news_url: str | None = None
     news_rss_url: str | None = None
     workspace_project_path: str | None = None
+    open_terminal_with_workspace: bool | None = None
     ai_primary: str | None = None
     ai_fallback: str | None = None
     ai_allow_local_fallback: bool | None = None

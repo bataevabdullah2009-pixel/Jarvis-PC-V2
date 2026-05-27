@@ -9,7 +9,7 @@
   "kion_music_search_url": "https://music.kion.ru/search?text={query}",
   "workspace_project_path": "C:\\Jarvis\\jarvis-car",
   "open_terminal_with_workspace": false,
-  "voice_profile": "Jarvis style",
+  "voice_profile": "System voice",
   "assistant_name": "Джарвис",
   "assistant_display_name": "JARVIS",
   "assistant_address_style": "сэр",
@@ -43,18 +43,34 @@
       "voice_id": "",
       "tone": "friendly",
       "enabled": true
+    },
+    {
+      "id": "optimus_prime",
+      "name": "Optimus Prime",
+      "provider": "fish_audio",
+      "voice_id": "581fdc4e41954da19ea0221db8ec0c78",
+      "tone": "serious",
+      "enabled": true
+    },
+    {
+      "id": "tony_stark",
+      "name": "Tony Stark",
+      "provider": "fish_audio",
+      "voice_id": "54a325e8638f4588bf04ea882f6e2aef",
+      "tone": "friendly",
+      "enabled": true
     }
   ],
   "voice_tone": "calm",
   "offline_mode": false,
   "vosk_model_path": "backend\\models\\vosk-model-small-ru-0.22",
   "clap_enabled": false,
-  "voice_volume": 82,
+  "voice_volume": 77,
   "voice_wake_enabled": true,
   "runtime_mode": "online",
   "autostart_enabled": true,
-  "ai_fallback": "openrouter",
-  "ai_primary": "openrouter",
+  "ai_fallback": "groq",
+  "ai_primary": "groq",
   "listener_enabled": true,
   "listener_autostart": true,
   "listener_device_id": "1"

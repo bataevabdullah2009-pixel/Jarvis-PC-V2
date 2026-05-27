@@ -120,6 +120,26 @@ def _mask_secret(value: str | None) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
+BUILT_IN_FISH_AUDIO_VOICE_PROFILES: list[dict[str, Any]] = [
+    {
+        "id": "optimus_prime",
+        "name": "Optimus Prime",
+        "provider": "fish_audio",
+        "voice_id": "581fdc4e41954da19ea0221db8ec0c78",
+        "tone": "serious",
+        "enabled": True,
+    },
+    {
+        "id": "tony_stark",
+        "name": "Tony Stark",
+        "provider": "fish_audio",
+        "voice_id": "54a325e8638f4588bf04ea882f6e2aef",
+        "tone": "friendly",
+        "enabled": True,
+    },
+]
+
+
 def _default_voice_profiles(main_voice_id: str | None = None, voice_id_2: str | None = None, voice_id_3: str | None = None) -> list[dict[str, Any]]:
     return [
         {
@@ -146,6 +166,7 @@ def _default_voice_profiles(main_voice_id: str | None = None, voice_id_2: str | 
             "tone": "friendly",
             "enabled": True,
         },
+        *[dict(profile) for profile in BUILT_IN_FISH_AUDIO_VOICE_PROFILES],
     ]
 
 

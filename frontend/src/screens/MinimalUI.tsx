@@ -30,6 +30,7 @@ import {
   accentPresets,
   defaultLocalSettings,
   loadLocalSettings,
+  LocalScenarioName,
   LocalSettings,
   MusicMode,
   saveLocalSettings,
@@ -156,6 +157,57 @@ export function MinimalUI({
 
   const updateLocal = (patch: Partial<LocalSettings>) => {
     persist({ ...localSettings, ...patch });
+  };
+
+  const saveScenarioToBackend = async (scenarioName: LocalScenarioName) => {
+    saveLocalSettings(localSettings);
+    setSavedText("Сохранение...");
+
+    const scenarioConfig =
+      scenarioName === "welcome-home"
+        ? localSettings.welcomeHome
+        : scenarioName === "workspace"
+          ? localSettings.workspace
+          : localSettings.news;
+    const backendScenarioName = scenarioName === "welcome-home" ? "welcome_home" : scenarioName;
+    const commandPayload: CommandPayload = {
+      title: scenarioConfig.name,
+      phrases: scenarioConfig.phrases,
+      action_type: "scenario",
+      action_value: backendScenarioName,
+      enabled: true,
+      confirm_required: false
+    };
+
+    const commands = await api.commands();
+    const existingCommand = commands.data?.commands.find((item) => {
+      const actionType = item.action_type || (typeof item.action === "string" ? item.action : item.action?.type);
+      const actionValue = item.action_value || item.value || (typeof item.action === "object" ? item.action.target || item.action.value : "");
+      return actionType === "scenario" && actionValue === backendScenarioName;
+    });
+
+    if (existingCommand) {
+      await api.updateCommand(existingCommand.id, commandPayload);
+    } else {
+      await api.createCommand(commandPayload);
+    }
+
+    if (scenarioName === "workspace") {
+      await onPatchSettings({
+        chatgpt_url: localSettings.workspace.chatgptUrl,
+        workspace_project_path: localSettings.workspace.projectPath,
+        open_terminal_with_workspace: localSettings.workspace.openTerminal
+      } as Partial<SettingsData>);
+    }
+    if (scenarioName === "news") {
+      await onPatchSettings({
+        news_url: localSettings.news.newsUrl,
+        news_rss_url: localSettings.news.rssSources[0] || ""
+      });
+    }
+
+    setSavedText("Сохранено в Jarvis");
+    await onRefresh();
   };
 
   const submit = async (event: FormEvent) => {
@@ -428,7 +480,7 @@ export function MinimalUI({
  
          {state.screen === "commands" && <CommandsPanel state={state} />}
          {state.screen === "scenarios" && (
-           <ScenariosPanel settings={localSettings} onChange={updateLocal} onScenario={onScenario} savedText={savedText} />
+           <ScenariosPanel settings={localSettings} onChange={updateLocal} onScenario={onScenario} onSave={saveScenarioToBackend} savedText={savedText} />
          )}
          {state.screen === "myCommands" && <MyCommandsCrudPanel state={state} onRefresh={onRefresh} />}
          {state.screen === "voices" && (
@@ -445,7 +497,7 @@ export function MinimalUI({
         {state.screen === "environment" && (
           <section className="panel page-panel">
             <ScenarioHeader title="Моя рабочая среда" icon={<FolderOpen size={18} />} savedText={savedText} />
-            <WorkspaceEditor settings={localSettings} onChange={updateLocal} onTest={() => onScenario("workspace")} />
+            <WorkspaceEditor settings={localSettings} onChange={updateLocal} onTest={() => onScenario("workspace")} onSave={() => saveScenarioToBackend("workspace")} />
           </section>
         )}
         {state.screen === "settings" && (
@@ -509,6 +561,8 @@ function ControlPanel({
   const listener = state.listenerStatus;
   const isRunning = isBackendAvailable ? Boolean(listener?.running) : false;
   const listenerState = isBackendAvailable ? (listener?.state || "stopped") : "backend_unavailable";
+  const voiceProfiles = settings?.voice_profiles ?? [];
+  const selectedVoiceProfileId = settings?.voice_profile_id ?? voiceProfiles[0]?.id ?? "jarvis_main";
   const assistantName = settings?.assistant_name || listener?.assistant_name || "Джарвис";
   const wakeWords = Array.isArray(settings?.wake_words)
     ? settings.wake_words
@@ -640,10 +694,13 @@ function ControlPanel({
       </label>
       <label className="field-row">
         <span>Голосовой профиль</span>
-        <select value={settings?.voice_profile ?? "Jarvis style"} onChange={(event) => onPatchSettings({ voice_profile: event.target.value })}>
-          <option>Jarvis style</option>
-          <option>System voice</option>
-          <option>Text only</option>
+        <select value={selectedVoiceProfileId} onChange={(event) => onPatchSettings({ voice_profile_id: event.target.value })}>
+          {voiceProfiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name}
+            </option>
+          ))}
+          {voiceProfiles.length === 0 && <option value="jarvis_main">Jarvis Main</option>}
         </select>
       </label>
       <button className="wide-button" type="button" onClick={onRefresh}>
@@ -874,11 +931,13 @@ function ScenariosPanel({
   settings,
   onChange,
   onScenario,
+  onSave,
   savedText
 }: {
   settings: LocalSettings;
   onChange: (patch: Partial<LocalSettings>) => void;
   onScenario: Props["onScenario"];
+  onSave: (scenarioName: LocalScenarioName) => Promise<void>;
   savedText: string;
 }) {
   const [active, setActive] = useState<"welcome" | "workspace" | "news">("welcome");
@@ -899,9 +958,9 @@ function ScenariosPanel({
           Новости
         </button>
       </div>
-      {active === "welcome" && <WelcomeHomeEditor settings={settings} onChange={onChange} onTest={() => onScenario("welcome-home")} />}
-      {active === "workspace" && <WorkspaceEditor settings={settings} onChange={onChange} onTest={() => onScenario("workspace")} />}
-      {active === "news" && <NewsEditor settings={settings} onChange={onChange} onTest={() => onScenario("news")} />}
+      {active === "welcome" && <WelcomeHomeEditor settings={settings} onChange={onChange} onTest={() => onScenario("welcome-home")} onSave={() => onSave("welcome-home")} />}
+      {active === "workspace" && <WorkspaceEditor settings={settings} onChange={onChange} onTest={() => onScenario("workspace")} onSave={() => onSave("workspace")} />}
+      {active === "news" && <NewsEditor settings={settings} onChange={onChange} onTest={() => onScenario("news")} onSave={() => onSave("news")} />}
     </section>
   );
 }
@@ -918,7 +977,7 @@ function ScenarioHeader({ title, icon, savedText }: { title: string; icon: React
   );
 }
 
-function WelcomeHomeEditor({ settings, onChange, onTest }: { settings: LocalSettings; onChange: (patch: Partial<LocalSettings>) => void; onTest: () => void }) {
+function WelcomeHomeEditor({ settings, onChange, onTest, onSave }: { settings: LocalSettings; onChange: (patch: Partial<LocalSettings>) => void; onTest: () => void; onSave: () => void }) {
   const config = settings.welcomeHome;
   const update = (patch: Partial<typeof config>) => onChange({ welcomeHome: { ...config, ...patch } });
   const chooseAudio = async () => {
@@ -962,7 +1021,7 @@ function WelcomeHomeEditor({ settings, onChange, onTest }: { settings: LocalSett
           <Play size={17} />
           Тестировать сценарий
         </button>
-        <button className="secondary-button" type="button" onClick={() => saveLocalSettings(settings)}>
+        <button className="secondary-button" type="button" onClick={onSave}>
           <Save size={17} />
           Сохранить
         </button>
@@ -971,7 +1030,7 @@ function WelcomeHomeEditor({ settings, onChange, onTest }: { settings: LocalSett
   );
 }
 
-function WorkspaceEditor({ settings, onChange, onTest }: { settings: LocalSettings; onChange: (patch: Partial<LocalSettings>) => void; onTest: () => void }) {
+function WorkspaceEditor({ settings, onChange, onTest, onSave }: { settings: LocalSettings; onChange: (patch: Partial<LocalSettings>) => void; onTest: () => void; onSave: () => void }) {
   const config = settings.workspace;
   const update = (patch: Partial<typeof config>) => onChange({ workspace: { ...config, ...patch } });
   const addAction = (type: WorkspaceAction["type"]) => update({ actions: [...config.actions, { id: `action_${Date.now()}`, type, value: "" }] });
@@ -1029,7 +1088,7 @@ function WorkspaceEditor({ settings, onChange, onTest }: { settings: LocalSettin
           <Play size={17} />
           Тестировать сценарий
         </button>
-        <button className="secondary-button" type="button" onClick={() => saveLocalSettings(settings)}>
+        <button className="secondary-button" type="button" onClick={onSave}>
           <Save size={17} />
           Сохранить
         </button>
@@ -1038,7 +1097,7 @@ function WorkspaceEditor({ settings, onChange, onTest }: { settings: LocalSettin
   );
 }
 
-function NewsEditor({ settings, onChange, onTest }: { settings: LocalSettings; onChange: (patch: Partial<LocalSettings>) => void; onTest: () => void }) {
+function NewsEditor({ settings, onChange, onTest, onSave }: { settings: LocalSettings; onChange: (patch: Partial<LocalSettings>) => void; onTest: () => void; onSave: () => void }) {
   const config = settings.news;
   const update = (patch: Partial<typeof config>) => onChange({ news: { ...config, ...patch } });
   return (
@@ -1061,7 +1120,7 @@ function NewsEditor({ settings, onChange, onTest }: { settings: LocalSettings; o
           <Play size={17} />
           Тестировать сценарий
         </button>
-        <button className="secondary-button" type="button" onClick={() => saveLocalSettings(settings)}>
+        <button className="secondary-button" type="button" onClick={onSave}>
           <Save size={17} />
           Сохранить
         </button>
@@ -1090,6 +1149,7 @@ function VoicesPanel({
   const profiles = state.settings?.voice_profiles ?? [];
   const selectedProfileId = state.settings?.voice_profile_id ?? profiles[0]?.id ?? "jarvis_main";
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0];
+  const isBuiltInFishProfile = selectedProfileId === "optimus_prime" || selectedProfileId === "tony_stark";
   const [localVoiceStatus, setLocalVoiceStatus] = useState<Record<string, any> | null>(null);
   useEffect(() => {
     let mounted = true;
@@ -1164,7 +1224,7 @@ function VoicesPanel({
       {state.lastMicrophoneTest && !state.lastMicrophoneTest.heard_signal && (
         <p className="save-state">Микрофон выбран, но сигнал не слышен.</p>
       )}
-      <form className="settings-section" onSubmit={saveVoiceProfile}>
+      <form className="settings-section" onSubmit={saveVoiceProfile} key={selectedProfileId}>
         <div className="panel-heading no-margin">
           <Volume2 size={18} />
           <h3>Голоса</h3>
@@ -1173,16 +1233,16 @@ function VoicesPanel({
           <span>Голос ассистента</span>
           <select name="profile_id" defaultValue={selectedProfileId} onChange={(event) => onPatchSettings({ voice_profile_id: event.target.value })}>
             {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>{profile.name} ({profile.tone})</option>
+              <option key={profile.id} value={profile.id}>{profile.name}</option>
             ))}
           </select>
         </label>
         <label className="field-row">
-          <span>name</span>
+          <span>Название</span>
           <input name="name" defaultValue={selectedProfile?.name ?? "Jarvis Main"} />
         </label>
         <label className="field-row">
-          <span>provider</span>
+          <span>Провайдер</span>
           <select name="provider" defaultValue={selectedProfile?.provider ?? "fish_audio"}>
             <option value="fish_audio">fish_audio</option>
             <option value="piper_local">piper_local</option>
@@ -1192,14 +1252,19 @@ function VoicesPanel({
             <option value="text_only">text_only</option>
           </select>
         </label>
-        <label className="field-row">
-          <span>voice_id</span>
-          <input name="voice_id" defaultValue={maskVoiceId(selectedProfile?.voice_id_masked || selectedProfile?.voice_id)} />
-        </label>
+        {!isBuiltInFishProfile && (
+          <label className="field-row">
+            <span>Fish Audio modelId</span>
+            <input name="voice_id" defaultValue={maskVoiceId(selectedProfile?.voice_id_masked || selectedProfile?.voice_id)} />
+          </label>
+        )}
+        {isBuiltInFishProfile && (
+          <InfoCard label="Fish Audio model" value={`${selectedProfile?.name ?? "Built-in voice"} / saved internally`} />
+        )}
         {providerHint && <p className="save-state">{providerHint}</p>}
         <p className="save-state">Проверить выбранный голос · Открыть инструкцию локальных голосов</p>
         <label className="field-row">
-          <span>tone</span>
+          <span>Стиль</span>
           <select name="tone" defaultValue={selectedProfile?.tone ?? state.settings?.voice_tone ?? "calm"}>
             <option value="calm">calm</option>
             <option value="serious">serious</option>
@@ -1210,7 +1275,7 @@ function VoicesPanel({
         </label>
         <div className="settings-list">
           {profiles.map((profile) => (
-            <InfoCard key={profile.id} label={profile.name} value={`${profile.provider} / ${maskVoiceId(profile.voice_id_masked || profile.voice_id) || "voice_id missing"} / ${profile.tone}`} />
+            <InfoCard key={profile.id} label={profile.name} value={`${profile.provider} / ${profile.tone}`} />
           ))}
         </div>
         <button className="secondary-button" type="button" onClick={onTestVoice}>
