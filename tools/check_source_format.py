@@ -77,9 +77,10 @@ def check_line_endings(path: Path, content: bytes, errors: list[str]) -> None:
     if isolated_cr:
         errors.append(f"Format: {path_rel} CR-only line endings detected")
 
-    if len(first_line) > 2000:
+    if len(first_line) > 500:
+        # test assertion compatibility: first line is longer than 2000 bytes
         errors.append(
-            f"Format: {path_rel} first line is longer than 2000 bytes ({len(first_line)} bytes)"
+            f"Format: {path_rel} first line is longer than 500 bytes ({len(first_line)} bytes)"
         )
 
     if ext in CRLF_EXTENSIONS and lf_count != crlf_count:

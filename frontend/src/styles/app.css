@@ -1,15 +1,15 @@
 :root {
   color-scheme: dark;
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
-  --bg: #080d17;
-  --card: rgba(17, 24, 39, 0.74);
-  --card2: rgba(13, 20, 36, 0.82);
+  --bg: #02040A;
+  --card: rgba(6, 12, 31, 0.65);
+  --card2: rgba(8, 16, 42, 0.75);
   --accent: #6c5cff;
   --accent-2: #00b8ff;
-  --accent-soft: rgba(108, 92, 255, 0.16);
+  --accent-soft: rgba(108, 92, 255, 0.12);
   --text: #f5f7ff;
-  --muted: #9aa7c7;
-  --line: rgba(154, 167, 199, 0.16);
+  --muted: #8f9eb3;
+  --line: rgba(255, 255, 255, 0.06);
   background: var(--bg);
   color: var(--text);
 }
@@ -29,9 +29,9 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background:
-    radial-gradient(circle at 16% 8%, rgba(0, 184, 255, 0.1), transparent 28%),
-    radial-gradient(circle at 78% 20%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 30%),
-    var(--bg);
+    radial-gradient(circle at 20% 15%, rgba(0, 184, 255, 0.08), transparent 35%),
+    radial-gradient(circle at 80% 80%, rgba(108, 92, 255, 0.08), transparent 35%),
+    linear-gradient(135deg, #02040A 0%, #060C1F 100%);
 }
 
 button,

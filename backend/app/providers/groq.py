@@ -112,10 +112,9 @@ class GroqPlanner:
             "Content-Type": "application/json",
         }
         timeout = httpx.Timeout(
-            float(self.settings.groq_timeout_seconds),
-            connect=min(5.0, float(self.settings.groq_timeout_seconds)),
-            read=float(self.settings.groq_timeout_seconds),
-            write=5.0,
+            connect=1.5,
+            read=3.0,
+            write=2.0,
             pool=5.0,
         )
 
@@ -209,7 +208,7 @@ class GroqPlanner:
                 self.endpoint,
                 headers=headers,
                 json=payload,
-                timeout=(min(5, self.settings.groq_timeout_seconds), self.settings.groq_timeout_seconds),
+                timeout=(1.5, 3.0),
             )
         except requests.exceptions.RequestException as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)

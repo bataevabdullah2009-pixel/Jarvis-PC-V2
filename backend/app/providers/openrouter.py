@@ -248,10 +248,9 @@ class OpenRouterPlanner:
         status_code: int | None = None
         retry_count = 0
         timeout = httpx.Timeout(
-            self.settings.openrouter_total_timeout,
-            connect=self.settings.openrouter_connect_timeout,
-            read=self.settings.openrouter_read_timeout,
-            write=5.0,
+            connect=2.0,
+            read=4.0,
+            write=2.0,
             pool=5.0,
         )
 
@@ -467,7 +466,7 @@ class OpenRouterPlanner:
                 self.endpoint,
                 headers=headers,
                 json=payload,
-                timeout=(self.settings.openrouter_connect_timeout, self.settings.openrouter_read_timeout),
+                timeout=(2.0, 4.0),
             )
         except requests.exceptions.RequestException as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)

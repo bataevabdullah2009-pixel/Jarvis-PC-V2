@@ -13,6 +13,16 @@ from app.core.config import env_debug_status, get_settings, patch_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.runtime import build_info
 from app.diagnostics.dependencies import check_backend_dependencies
+from app.contracts.runtime_contract import (
+    RuntimeStatus,
+    SettingsData,
+    ListenerStatus,
+    AIProviderStatus,
+    VoiceProviderStatus,
+    TTSStatus,
+    CommandData,
+    AssistantResult,
+)
 from app.diagnostics.full_test import run_full_test
 from app.events.websocket_bus import event_bus
 from app.pc.system import get_system_status
@@ -329,6 +339,93 @@ def app_status() -> dict[str, Any]:
             "version": settings.version,
         }
     )
+
+
+@app.get("/debug/system-contract")
+def debug_system_contract() -> dict[str, Any]:
+    # Strictly compile examples against Pydantic models to verify conformity
+    try:
+        mock_listener = ListenerStatus(
+            status="listening",
+            device_id="default",
+            device_name="Microphone (Realtek High Definition Audio)",
+            wake_words=["джарвис", "чарли"],
+            is_listening=True,
+            error_message=None,
+            fixes=[]
+        )
+        mock_ai = AIProviderStatus(
+            provider="groq",
+            model="llama-3.1-8b-instant",
+            configured=True,
+            latency_ms=120,
+            available=True
+        )
+        mock_voice = VoiceProviderStatus(
+            provider="fish_audio",
+            voice_id="54a325e8638f4588bf04ea882f6e2aef",
+            configured=True,
+            voice_tone="calm"
+        )
+        mock_tts = TTSStatus(
+            status="ready",
+            queue_size=0,
+            active=False
+        )
+        mock_runtime = RuntimeStatus(
+            app_name="JARVIS PC V2",
+            version="0.1.0",
+            phase="phase-2-3-1",
+            debug_mode=False,
+            listener=mock_listener,
+            ai=mock_ai,
+            voice=mock_voice,
+            tts=mock_tts
+        )
+        mock_settings = SettingsData(
+            assistant_name="Джарвис",
+            assistant_display_name="JARVIS",
+            assistant_address_style="сэр",
+            voice_wake_enabled=True,
+            clap_enabled=True,
+            autostart_enabled=False,
+            voice_volume=70,
+            ai_primary="groq",
+            ai_fallback="openrouter",
+            tts_primary="fish_audio",
+            cooldown_ms=2500,
+            listener_device_id="default",
+            wake_words=["джарвис", "чарли"]
+        )
+        mock_command = CommandData(
+            id="open_browser",
+            name="Открыть браузер",
+            phrases=["открой браузер", "запусти интернет"],
+            action_type="url",
+            action_target="https://google.com",
+            enabled=True
+        )
+        mock_result = AssistantResult(
+            query="джарвис сколько время",
+            response="Сейчас 16 часов 15 минут, сэр.",
+            command_triggered=None,
+            success=True,
+            latency={
+                "router_ms": 80,
+                "ai_ms": 420,
+                "tts_ms": 350,
+                "total_ms": 850
+            }
+        )
+
+        return envelope({
+            "RuntimeStatus": mock_runtime.model_dump(),
+            "SettingsData": mock_settings.model_dump(),
+            "CommandData": mock_command.model_dump(),
+            "AssistantResult": mock_result.model_dump()
+        })
+    except Exception as e:
+        return envelope({"error": str(e)}, ok=False)
 
 
 @app.get("/runtime/build-info")

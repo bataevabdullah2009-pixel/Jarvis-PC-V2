@@ -400,24 +400,26 @@ export function MinimalUI({
                 {state.lastResult && (
                   <div className="assistant-metrics-card" style={{
                     marginTop: "12px",
-                    padding: "8px 12px",
+                    padding: "12px",
                     background: "rgba(0, 0, 0, 0.25)",
-                    borderRadius: "6px",
+                    borderRadius: "8px",
                     fontSize: "0.8rem",
                     border: "1px solid rgba(255, 255, 255, 0.05)",
                     display: "flex",
                     flexDirection: "column",
-                    gap: "6px"
+                    gap: "10px"
                   }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
                       <div>
-                        <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>AI: </span>
+                        <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>AI Brain: </span>
                         <strong style={{ color: "var(--accent)" }}>
                           {state.lastResult.provider === "openrouter" 
-                            ? `openrouter / ${state.lastResult.model || "unknown"} / ${state.lastResult.latency?.openrouter_ms ?? state.lastResult.latency?.ai_ms ?? 0} ms` 
-                            : state.lastResult.local_matched 
-                              ? `local / ${state.lastResult.latency?.local_command_ms ?? 0} ms` 
-                              : "none"}
+                            ? `OpenRouter / ${state.lastResult.model || "unknown"} / ${state.lastResult.latency?.openrouter_ms ?? state.lastResult.latency?.ai_ms ?? 0} ms` 
+                            : state.lastResult.provider === "groq"
+                              ? `Groq / ${state.lastResult.model || "unknown"} / ${state.lastResult.latency?.ai_ms ?? 0} ms`
+                              : state.lastResult.local_matched 
+                                ? `Local Command / ${state.lastResult.latency?.local_command_ms ?? 0} ms` 
+                                : "none"}
                         </strong>
                       </div>
                       <div>

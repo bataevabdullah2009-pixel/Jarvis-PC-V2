@@ -406,6 +406,18 @@ class VoiceListener:
         """Returns the full listener status structured response."""
         settings = get_settings()
         running = self.state not in {"stopped", "blocked", "error"} and self._thread is not None and self._thread.is_alive()
+
+        # Watchdog auto-restart check
+        if settings.listener_enabled and settings.listener_autostart and not running and self.state not in {"stopped", "blocked", "error"}:
+            logger.info("[LISTENER] Watchdog: Listener is enabled and autostart is active but thread is not running. Attempting auto-restart.")
+            try:
+                self.start(self.device_id, wake_word_enabled=self.wake_word_enabled, clap_enabled=self.clap_enabled, force_start=False)
+                running = self.state not in {"stopped", "blocked", "error"} and self._thread is not None and self._thread.is_alive()
+            except Exception as e:
+                logger.error("[LISTENER] Watchdog auto-restart failed: %s", e)
+                self.block("watchdog_failed", "Проверьте микрофон в настройках системы.", str(e))
+                running = False
+
         gate_res = {"safe_to_start": False, "failed_check": None, "fix": None, "checks": {}}
         if settings.listener_enabled and not running:
             gate_res = self.check_safe_start(self.device_id)
