@@ -21,6 +21,10 @@ class OfflineTTS:
         return importlib.util.find_spec("pyttsx3") is not None
 
     def speak(self, text: str, *, dry_run: bool = False) -> dict[str, Any]:
+        import os
+        if os.environ.get("JARVIS_TEST_MODE") == "true" and not dry_run:
+            raise RuntimeError("REAL_PROVIDER_USED_IN_TESTS: OfflineTTS.speak used in tests.")
+
         if not self.available():
             return {
                 "mode": "offline_tts",

@@ -208,11 +208,15 @@ def test_listener_enabled_not_stopped_without_reason() -> None:
 
 def test_listener_safe_start_does_not_block_quiet_room(monkeypatch) -> None:
     from app.voice.listener import voice_listener
+    from app.providers.openrouter import OpenRouterPlanner
 
     voice_listener.stop()
     monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda device_id="default": {"ok": True, "device_name": "Test Mic"})
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id="default", duration_seconds=0.2: {"ok": True, "heard_signal": False})
     monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
+    monkeypatch.setattr(OpenRouterPlanner, "_busy", False, raising=False)
+    
     result = voice_listener.check_safe_start("default")
     assert result["safe_to_start"] is True
     assert result["checks"]["microphone_heard_signal"] is False

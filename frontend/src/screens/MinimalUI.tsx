@@ -8,6 +8,7 @@ import {
   Home,
   Link,
   Mic,
+  MicOff,
   Music2,
   Newspaper,
   Palette,
@@ -472,13 +473,57 @@ export function MinimalUI({
 
               <HistoryPanel state={state} compact />
 
-              <div className="voice-only-panel">
-                <Mic size={18} />
-                <div>
-                  <strong>Голосовое управление активно</strong>
-                  <span>Скажите “Джарвис”, затем команду. Текстовый ввод на главном экране отключён.</span>
+              {Boolean(state.listenerStatus?.running) ? (
+                <div className="voice-only-panel">
+                  <Mic size={18} style={{ color: "#00FF66" }} />
+                  <div>
+                    <strong>Слушаю 24/7: скажите “Джарвис”</strong>
+                    <span>Голосовое управление активно. Скажите “Джарвис”, затем команду. Текстовый ввод на главном экране отключён.</span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="voice-only-panel" style={{ borderLeft: "4px solid #FF5E5E", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <MicOff size={18} style={{ color: "#FF5E5E" }} />
+                    <div>
+                      <strong>
+                        {state.listenerStatus?.state === "blocked" || state.listenerStatus?.state === "error"
+                          ? `Автослушание заблокировано: ${state.listenerStatus?.last_error_type || "ошибка микрофона"}`
+                          : "Автослушание остановлено"}
+                      </strong>
+                      <span style={{ fontSize: "0.8rem", opacity: 0.8, display: "block", marginTop: "2px" }}>
+                        {state.listenerStatus?.state === "blocked" || state.listenerStatus?.state === "error"
+                          ? `Причина: ${state.listenerStatus?.last_error || "микрофон занят или недоступен"}. Решение: ${state.listenerStatus?.fix || "перезапустите устройство"}`
+                          : "Голосовое управление отключено. Вы можете включить его в панели управления справа."}
+                      </span>
+                    </div>
+                  </div>
+                  {(state.listenerStatus?.state === "blocked" || state.listenerStatus?.state === "error" || state.listenerStatus?.state === "stopped") && (
+                    <button
+                      className="primary-button"
+                      type="button"
+                      style={{
+                        marginTop: "4px",
+                        padding: "6px 12px",
+                        fontSize: "0.8rem",
+                        background: "rgba(255, 255, 255, 0.1)",
+                        color: "#FFF",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                        transition: "all 0.2s ease"
+                      }}
+                      onClick={async () => {
+                        await api.listenerStart(selectedDevice || "default", true, false);
+                        onRefresh();
+                      }}
+                    >
+                      Перезапустить слушатель
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="quick-actions">
                 {quickCommands.map((item) => (

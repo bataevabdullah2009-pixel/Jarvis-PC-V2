@@ -1184,14 +1184,90 @@ def voice_record_command(request: RecordCommandRequest) -> dict[str, Any]:
 def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -> dict[str, Any]:
     status_dict = voice_listener.status()
     settings = get_settings()
-    reason = status_dict["data"].get("reason")
-    if not settings.listener_enabled and not reason:
-        reason = "listener disabled by default"
-        status_dict["data"]["reason"] = reason
+    
+    enabled = bool(settings.listener_enabled)
+    autostart = bool(settings.listener_autostart)
+    running = bool(status_dict["data"].get("running", False))
+    state = status_dict["data"].get("state", "stopped")
+    
+    device_id = status_dict["data"].get("device_id") or settings.listener_device_id or "default"
+    device_name = status_dict["data"].get("device_name") or settings.listener_device_name or "Микрофон"
+    
+    last_error_type = status_dict["data"].get("last_error_type") or status_dict["data"].get("failed_check")
+    last_error = status_dict["data"].get("last_error")
+    fix = status_dict["data"].get("fix")
+
+    forbidden_terms = ["unknown reason", "причина не указана", "stopped without reason"]
+    
+    def is_forbidden(text):
+        if not text:
+            return True
+        return any(term in str(text).lower() for term in forbidden_terms)
+
+    def is_only_restart_fix(text):
+        if not text:
+            return True
+        return str(text).strip().lower() == "restart the listener from ui or post /voice/listener-start."
+
+    if enabled and autostart and not running:
+        if state not in {"blocked", "error"}:
+            state = "blocked"
+
+    if not running:
+        if state in {"blocked", "error"}:
+            if is_forbidden(last_error_type) or is_only_restart_fix(last_error_type):
+                last_error_type = "microphone_open_failed"
+            if is_forbidden(last_error) or is_only_restart_fix(last_error):
+                last_error = "Не удалось открыть аудио поток. Возможно, микрофон занят другим приложением."
+            if is_forbidden(fix) or is_only_restart_fix(fix) or not fix:
+                fix = "Проверьте подключение устройства и перезапустите слушатель."
+        else:
+            state = "stopped"
+            last_error_type = None
+            last_error = None
+            fix = None
+    else:
+        if state not in {"listening_for_wake_word", "speaking", "cooldown"}:
+            state = "listening_for_wake_word"
+        last_error_type = None
+        last_error = None
+        fix = None
+
+    if running:
+        if state == "listening_for_wake_word":
+            status_text = "Слушаю 24/7: скажите 'Джарвис'"
+        elif state == "speaking":
+            status_text = "Джарвис говорит..."
+        elif state == "cooldown":
+            status_text = "Режим ожидания (cooldown)"
+        else:
+            status_text = f"Активно ({state})"
+    else:
+        if state in {"blocked", "error"}:
+            status_text = f"Автослушание заблокировано: {last_error_type}"
+        else:
+            status_text = "Автослушание остановлено"
+
+    can_restart = not running
 
     return {
         "ok": ok,
-        "data": status_dict["data"],
+        "data": {
+            "enabled": enabled,
+            "autostart": autostart,
+            "running": running,
+            "state": state,
+            "status_text": status_text,
+            "device_id": str(device_id),
+            "device_name": str(device_name),
+            "last_error_type": last_error_type,
+            "last_error": last_error,
+            "fix": fix,
+            "can_restart": can_restart,
+            "safe_to_start": bool(status_dict["data"].get("safe_to_start", False)),
+            "errors": status_dict["data"].get("errors", []),
+            "warnings": status_dict["data"].get("warnings", [])
+        },
         "error": error_dict
     }
 
@@ -1204,6 +1280,7 @@ def voice_listener_status() -> dict[str, Any]:
 
 @app.post("/voice/listener-start")
 def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
+    import time
     dev_res = resolve_input_device(get_settings(), device_id=request.device_id)
     device_patch: dict[str, Any] = {}
     if dev_res.get("ok"):
@@ -1226,21 +1303,12 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
     voice_listener.device_id = request.device_id
     gate_res = voice_listener.check_safe_start(request.device_id)
     if not gate_res["safe_to_start"]:
-        error_payload = {
-            "code": "SAFE_GATE_BLOCKED",
-            "message": gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}",
-            "details": {
-                "failed_check": gate_res["failed_check"],
-                "fix": gate_res["fix"],
-                "checks": gate_res["checks"]
-            }
-        }
         voice_listener.block(
-            gate_res["failed_check"] or "listener_blocked",
-            gate_res["fix"],
+            gate_res["failed_check"] or "microphone_open_failed",
+            gate_res["fix"] or "Выберите другой микрофон или включите доступ Windows к микрофону.",
             gate_res["fix"] or f"Blocked by check: {gate_res['failed_check']}",
         )
-        return make_listener_response(False, error_payload)
+        return make_listener_response(False)
 
     result = voice_listener.start(
         device_id=request.device_id,
@@ -1248,7 +1316,21 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
         clap_enabled=False,
         force_start=True
     )
-    return make_listener_response(result.get("ok", True))
+    
+    # Wait up to 100ms or check if thread is alive and running
+    time.sleep(0.1)
+    status_data = voice_listener.status()
+    running = status_data["data"]["running"]
+    
+    if not running:
+        voice_listener.block(
+            "microphone_open_failed",
+            "Проверьте настройки Windows, разрешение микрофона и выбранное устройство.",
+            "Не удалось запустить поток записи с выбранного микрофона."
+        )
+        return make_listener_response(False)
+
+    return make_listener_response(True)
 
 
 @app.post("/voice/listener-stop")
