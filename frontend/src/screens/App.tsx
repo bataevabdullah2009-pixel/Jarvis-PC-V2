@@ -194,6 +194,8 @@ export function App() {
     
     if (ttsProvider === "none") {
       ttsUnavailable = "Backend вернул некорректный TTS provider none";
+    } else if (isTtsQueued(data)) {
+      ttsUnavailable = null;
     } else if (!ttsOk || ttsProvider === "text_only") {
       const ttsErr = stripMojibake(data.tts?.error, data.tts?.status || "unknown");
       const ttsFix = stripMojibake(

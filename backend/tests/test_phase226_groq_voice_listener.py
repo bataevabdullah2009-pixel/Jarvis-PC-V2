@@ -245,18 +245,18 @@ def test_listener_autostart_success(monkeypatch: pytest.MonkeyPatch) -> None:
     voice_listener.stop()
 
 
-def test_listener_autostart_blocked_with_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_listener_autostart_quiet_room_keeps_running(monkeypatch: pytest.MonkeyPatch) -> None:
     voice_listener.stop()
     monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda device_id="default": {"ok": True, "device_name": "Test Mic"})
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id="default", duration_seconds=0.2: {"heard_signal": False})
     monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
 
     result = voice_listener.start(device_id="default", force_start=False)
 
-    assert result["data"]["running"] is False
-    assert result["data"]["state"] == "blocked"
-    assert result["data"]["last_error_type"] == "microphone_no_audio"
-    assert result["data"]["fix"]
+    assert result["data"]["running"] is True
+    assert result["data"]["state"] in {"starting", "listening_for_wake_word"}
+    voice_listener.stop()
 
 
 def test_anti_echo_blocks_self_transcript() -> None:

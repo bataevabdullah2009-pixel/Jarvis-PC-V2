@@ -65,17 +65,18 @@
   "offline_mode": false,
   "vosk_model_path": "backend\\models\\vosk-model-small-ru-0.22",
   "clap_enabled": false,
-  "voice_volume": 77,
+  "voice_volume": 81,
   "voice_wake_enabled": true,
   "runtime_mode": "online",
   "autostart_enabled": true,
-  "ai_fallback": "groq",
-  "ai_primary": "groq",
+  "ai_fallback": "openrouter",
+  "ai_primary": "openrouter",
   "listener_enabled": true,
   "listener_autostart": true,
-  "listener_device_id": "default",
+  "listener_device_id": "1",
   "listener_device_name": "Микрофон (3- ME6S)",
   "listener_device_hostapi": "MME",
   "listener_device_channels": 1,
-  "listener_device_samplerate": 44100
+  "listener_device_samplerate": 44100,
+  "ai_allow_local_fallback": false
 }

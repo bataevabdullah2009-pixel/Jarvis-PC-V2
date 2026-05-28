@@ -356,7 +356,12 @@ def voice_dependency_check() -> dict[str, Any]:
 @app.get("/voice/tts-status")
 def voice_tts_status() -> dict[str, Any]:
     data = TTSService(get_settings()).status()
-    data.update(speech_queue.status())
+    queue_data = speech_queue.status()
+    data.update(queue_data)
+    if not queue_data.get("last_job_id"):
+        data["last_provider"] = data.get("last_provider_used") or queue_data.get("last_provider")
+        data["last_error_type"] = data.get("last_error_type") or queue_data.get("last_error_type")
+        data["last_error"] = data.get("last_error") or queue_data.get("last_error")
     return envelope(data)
 
 
@@ -885,6 +890,17 @@ def voice_debug_open_microphone(request: DebugOpenMicrophoneRequest) -> dict[str
         duration_seconds=request.duration_seconds,
     )
     ok = bool(data.get("opened_device")) and not data.get("final_error_type")
+    opened = data.get("opened_device")
+    if ok and isinstance(opened, dict):
+        patch_settings(
+            {
+                "listener_device_id": str(opened.get("id") or opened.get("device_id") or request.device_id),
+                "listener_device_name": str(opened.get("name") or ""),
+                "listener_device_hostapi": str(opened.get("hostapi") or ""),
+                "listener_device_channels": int(opened.get("channels") or 1),
+                "listener_device_samplerate": int(float(opened.get("default_samplerate") or 16000)),
+            }
+        )
     return envelope(
         data,
         ok=ok,

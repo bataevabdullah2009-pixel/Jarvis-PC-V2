@@ -81,18 +81,19 @@ def test_fish_config_visible_in_voice_provider_status(monkeypatch) -> None:
     assert body["data"]["selected_provider"] == "fish_audio"
 
 
-def test_listener_autostart_enabled_but_blocked_no_audio(monkeypatch) -> None:
+def test_listener_autostart_enabled_quiet_room_keeps_running(monkeypatch) -> None:
     voice_listener.stop()
     monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda device_id="default": {"ok": True, "device_name": "Test Mic"})
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id="default", duration_seconds=0.2: {"heard_signal": False})
     monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
 
     result = voice_listener.start(device_id="default")
     data = result["data"]
-    assert result["ok"] is False
-    assert data["state"] == "blocked"
-    assert data["running"] is False
-    assert data["last_error_type"] == "microphone_no_audio"
+    assert result["ok"] is True
+    assert data["running"] is True
+    assert data["state"] in {"starting", "listening_for_wake_word"}
+    voice_listener.stop()
 
 
 def test_listener_autostart_enabled_success(monkeypatch) -> None:

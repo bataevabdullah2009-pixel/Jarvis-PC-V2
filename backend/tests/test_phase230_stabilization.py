@@ -163,6 +163,38 @@ def test_debug_open_microphone_endpoint_shape(monkeypatch) -> None:
     assert {"selected_device", "opened_device", "attempts", "rms", "peak", "heard_signal", "final_error_type", "final_error", "fixes"}.issubset(data["data"])
 
 
+def test_debug_open_microphone_persists_opened_fallback_device(monkeypatch) -> None:
+    settings_path = CONFIG_DIR / "settings.json"
+    restore = _restore(settings_path)
+    next(restore)
+    try:
+        def fake_debug(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "selected_device": {"device_id": 23, "device_name": "ME6S WDM-KS"},
+                "opened_device": {"id": "1", "name": "ME6S MME", "hostapi": "MME", "channels": 1, "default_samplerate": 44100.0},
+                "attempts": [{"attempt": 1, "ok": False}, {"attempt": 2, "ok": True}],
+                "rms": 0.01,
+                "peak": 0.03,
+                "heard_signal": True,
+                "final_error_type": None,
+                "final_error": None,
+                "fixes": [],
+            }
+
+        monkeypatch.setattr("app.main.debug_open_microphone", fake_debug)
+        response = client.post("/voice/debug-open-microphone", json={"device_id": "23", "duration_seconds": 1}).json()
+        assert response["ok"] is True
+        settings = Settings.load()
+        assert settings.listener_device_id == "1"
+        assert settings.listener_device_name == "ME6S MME"
+        assert settings.listener_device_hostapi == "MME"
+    finally:
+        try:
+            next(restore)
+        except StopIteration:
+            pass
+
+
 def test_listener_enabled_not_stopped_without_reason() -> None:
     patch_settings({"listener_enabled": True, "listener_autostart": True})
     data = client.get("/voice/listener-status").json()["data"]
@@ -171,6 +203,18 @@ def test_listener_enabled_not_stopped_without_reason() -> None:
         assert data["last_error_type"]
         assert data["last_error"] or data["failed_check"]
         assert data["fix"]
+
+
+def test_listener_safe_start_does_not_block_quiet_room(monkeypatch) -> None:
+    from app.voice.listener import voice_listener
+
+    voice_listener.stop()
+    monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda device_id="default": {"ok": True, "device_name": "Test Mic"})
+    monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id="default", duration_seconds=0.2: {"ok": True, "heard_signal": False})
+    monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    result = voice_listener.check_safe_start("default")
+    assert result["safe_to_start"] is True
+    assert result["checks"]["microphone_heard_signal"] is False
 
 
 def test_wakeword_ignores_without_name() -> None:
@@ -263,6 +307,38 @@ def test_tts_job_reaches_final_status() -> None:
     assert speech_queue.status()["last_job_status"] in {"played", "failed", "text_only", "cancelled"}
 
 
+def test_tts_queued_result_is_not_marked_failed() -> None:
+    result = CommandRouter(Settings())._queued_tts_result("hello")
+    assert result["status"] == "queued"
+    assert result["ok"] is True
+    assert result["pending_audio"] is True
+
+
+def test_tts_status_keeps_direct_provider_when_queue_idle(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.TTSService.status", lambda self: {"last_provider_used": "fish_audio", "last_error_type": None, "last_error": None})
+    monkeypatch.setattr("app.main.speech_queue.status", lambda: {"last_job_id": None, "last_provider": "text_only", "last_error_type": None, "last_error": None})
+    data = client.get("/voice/tts-status").json()["data"]
+    assert data["last_provider"] == "fish_audio"
+
+
+def test_fish_timeout_uses_emergency_system_voice(monkeypatch) -> None:
+    from app.voice.speech_orchestrator import SpeechOrchestrator
+
+    settings = Settings()
+    settings.tts_require_fish_audio = True
+    settings.tts_fallback_enabled = False
+    settings.fish_audio_api_key = "key"
+    settings.fish_audio_voice_id = "voice"
+    settings.voice_profiles = [{"id": "jarvis_main", "name": "Jarvis Main", "provider": "fish_audio", "voice_id": "voice", "tone": "calm", "enabled": True}]
+    settings.voice_profile_id = "jarvis_main"
+    orchestrator = SpeechOrchestrator(settings)
+    monkeypatch.setattr(orchestrator, "_try_provider", lambda provider, text, dry_run, blocking=False: {"ok": False, "provider": "fish_audio", "error": "timeout", "error_type": "fish_timeout"} if provider == "fish_audio" else {"ok": True, "provider": "pyttsx3", "status": "completed", "spoken": True, "played": True})
+    result = orchestrator.say("hello", blocking=True)
+    assert result["provider"] == "pyttsx3"
+    assert result["fallback_used"] is True
+    assert result["voice_locked_degraded"] is True
+
+
 def test_ui_no_unknown_reason() -> None:
     text = (ROOT / "frontend" / "src" / "screens" / "MinimalUI.tsx").read_text(encoding="utf-8")
     assert "unknown reason" not in text
@@ -279,6 +355,11 @@ def test_ui_has_microphone_debug_button() -> None:
     text = (ROOT / "frontend" / "src" / "screens" / "MinimalUI.tsx").read_text(encoding="utf-8")
     assert "onTestMicrophone(selectedDevice)" in text
     assert "debugOpenMicrophone" in (ROOT / "frontend" / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+
+
+def test_ui_does_not_treat_queued_tts_as_unavailable() -> None:
+    text = (ROOT / "frontend" / "src" / "screens" / "App.tsx").read_text(encoding="utf-8")
+    assert "isTtsQueued(data)" in text
 
 
 def test_ui_has_commands_crud() -> None:

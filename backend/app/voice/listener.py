@@ -78,6 +78,7 @@ class VoiceListener:
         self._stop_event = threading.Event()
         self._trigger_timestamps: list[float] = []
         self._assistant_lock = threading.Lock()
+        self._last_opened_device: dict[str, Any] | None = None
 
         self._initialized = True
 
@@ -134,6 +135,9 @@ class VoiceListener:
                 test_res = test_microphone(device_id=device_id, duration_seconds=0.2)
                 microphone_ok = bool(test_res.get("ok", True))
                 microphone_heard_signal = bool(test_res.get("heard_signal", False))
+                opened_device = test_res.get("opened_device")
+                if isinstance(opened_device, dict):
+                    self._last_opened_device = opened_device
             except Exception as e:
                 logger.error("[LISTENER] Microphone test exception: %s", e)
                 diagnosis = diagnose_microphone_error(e)
@@ -168,7 +172,17 @@ class VoiceListener:
             "no_other_listener_running": no_other_listener_running
         }
 
-        safe_to_start = all(checks.values())
+        safe_to_start = all(
+            [
+                backend_alive,
+                device_exists,
+                microphone_ok,
+                stt_configured,
+                anti_echo_available,
+                no_current_tts_speaking,
+                no_other_listener_running,
+            ]
+        )
         failed_check = None
         fix = None
 
@@ -179,9 +193,6 @@ class VoiceListener:
             elif not microphone_ok:
                 failed_check = self.last_error_type or "microphone_open_failed"
                 fix = "Микрофон выбран, но сигнал не слышен. Проверьте чувствительность Windows, разрешение микрофона и выбранное устройство."
-            elif not microphone_heard_signal:
-                failed_check = "microphone_no_audio"
-                fix = "Microphone opened, but no input signal was detected. Check Windows input level or choose another device."
             elif not stt_configured:
                 offline = stt_conf.get("offline", {}) if isinstance(stt_conf, dict) else {}
                 if offline.get("vosk_available") and not offline.get("model_configured"):
@@ -305,6 +316,26 @@ class VoiceListener:
                         }
                     }
 
+            if self._last_opened_device:
+                opened = self._last_opened_device
+                opened_id = str(opened.get("id") or opened.get("device_id") or self.device_id)
+                self.device_id = opened_id
+                self.device_name = str(opened.get("name") or self.device_name)
+                try:
+                    from app.core.config import patch_settings
+
+                    patch_settings(
+                        {
+                            "listener_device_id": opened_id,
+                            "listener_device_name": self.device_name,
+                            "listener_device_hostapi": str(opened.get("hostapi") or ""),
+                            "listener_device_channels": int(opened.get("channels") or 1),
+                            "listener_device_samplerate": int(float(opened.get("default_samplerate") or 16000)),
+                        }
+                    )
+                except Exception as exc:
+                    logger.warning("[LISTENER] Failed to persist opened microphone device: %s", exc)
+
             # Anti-echo check for loopback device names
             if check_loopback_device(self.device_name):
                 self.warnings.append(f"Warning: Selected device '{self.device_name}' is a loopback/stereo mix device. This may cause voice loops.")
@@ -339,6 +370,10 @@ class VoiceListener:
             self._thread = None
 
         self.state = "stopped"
+        self.last_error_type = None
+        self.last_error = None
+        self.fix = None
+        self.errors = []
 
         # Sync listener_state in wake.py
         try:
@@ -382,7 +417,16 @@ class VoiceListener:
             display_state = "stopped"
         elif settings.listener_enabled and settings.listener_autostart and not running:
             display_state = "blocked"
-            if not self.last_error_type:
+            if gate_res.get("safe_to_start"):
+                self._inc_metric("stops_without_reason")
+                self.last_error_type = "listener_not_running"
+                self.last_error = "Listener is enabled but no background worker is running."
+                self.fix = "Restart the listener from UI or POST /voice/listener-start."
+            elif gate_res.get("failed_check") and self.state == "stopped":
+                self.last_error_type = gate_res["failed_check"]
+                self.last_error = gate_res["fix"] or gate_res["failed_check"]
+                self.fix = gate_res["fix"]
+            elif not self.last_error_type:
                 self._inc_metric("stops_without_reason")
                 self.last_error_type = gate_res["failed_check"] or "listener_not_running"
                 self.last_error = self.last_error or "Listener is enabled but no background worker is running."
@@ -527,6 +571,12 @@ class VoiceListener:
                 sample_rate=16000,
                 channels=1
             )
+            if isinstance(getattr(capture, "device", None), dict):
+                opened = capture.device
+                opened_id = str(opened.get("id") or opened.get("device_id") or self.device_id)
+                if opened_id != str(self.device_id):
+                    self.device_id = opened_id
+                    self.device_name = str(opened.get("name") or self.device_name)
         except VoiceDependencyError as ex:
             logger.error("[LISTENER] Audio capture failed: %s", ex)
             self._inc_metric("no_audio_events")

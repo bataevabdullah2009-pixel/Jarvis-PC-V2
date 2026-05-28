@@ -37,9 +37,17 @@ def test_listener_status_contract_always_has_running() -> None:
 
 def test_start_listener_contract_always_has_running(monkeypatch) -> None:
     # Even if safe gate fails, running should be present in the returned data dict!
+    voice_listener.stop()
+    monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda dev_id: {
+        "ok": False,
+        "error_type": "microphone_device_not_found",
+        "fix": "Select another input device.",
+    })
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id, duration_seconds: {
         "heard_signal": False, "rms": 0.0, "peak": 0.0
     })
+    monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
     response = client.post(
         "/voice/start-listener",
         json={"wake_word": True, "clap": False, "device_id": "default"},
@@ -52,24 +60,27 @@ def test_start_listener_contract_always_has_running(monkeypatch) -> None:
     assert body["data"]["running"] is False
 
 
-def test_start_listener_blocked_when_no_audio(monkeypatch) -> None:
+def test_start_listener_allows_quiet_room(monkeypatch) -> None:
     # Force heard_signal = False
+    voice_listener.stop()
     monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda dev_id: {
         "ok": True, "device_name": "Test Mic", "sample_rate": 16000, "channels": 1
     })
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id, duration_seconds: {
         "heard_signal": False, "rms": 0.0, "peak": 0.0
     })
+    monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
     response = client.post(
         "/voice/start-listener",
         json={"wake_word": True, "clap": False, "device_id": "default"},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["ok"] is False
-    assert body["data"]["running"] is False
-    assert body["data"]["state"] == "blocked"
-    assert body["data"]["last_error_type"] == "microphone_no_audio"
+    assert body["ok"] is True
+    assert body["data"]["running"] is True
+    assert body["data"]["state"] in {"starting", "listening_for_wake_word"}
+    voice_listener.stop()
 
 
 def test_assistant_ask_works_with_listener_disabled(monkeypatch) -> None:

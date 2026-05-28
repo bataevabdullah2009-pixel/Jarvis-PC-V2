@@ -96,6 +96,43 @@ const statusLabel = {
   error: "Ошибка"
 };
 
+function listenerReasonText(listener: any): string {
+  const code = listener?.last_error_type || listener?.reason || listener?.failed_check;
+  const fix = listener?.fix;
+
+  if (code === "microphone_no_audio") {
+    return "микрофон открыт, но входной сигнал слишком тихий. Проверьте уровень входа Windows или выберите ME6S MME.";
+  }
+  if (code === "windows_audio_host_error") {
+    return "Windows audio host error. Закройте Telegram/Discord/браузер/OBS, отключите монопольный режим микрофона и выберите другой ME6S device.";
+  }
+  if (code === "microphone_busy") {
+    return "микрофон занят другим приложением. Закройте программы, которые используют микрофон.";
+  }
+  if (code === "microphone_device_not_found") {
+    return "выбранный микрофон не найден. Выберите доступный микрофон в списке.";
+  }
+  if (code === "microphone_open_failed") {
+    return "микрофон не открылся. Нажмите проверку микрофона и выберите device, который реально открывается.";
+  }
+  if (code === "anti_echo_locked") {
+    return "Jarvis говорит или идёт пауза после ответа. Listener вернётся к прослушиванию после cooldown.";
+  }
+  if (code === "vosk_model_missing") {
+    return "STT не настроен: укажите путь к Vosk-модели.";
+  }
+  if (code === "listener_thread_crashed") {
+    return "поток listener упал. Подробности в diagnostics/logs.";
+  }
+  if (typeof fix === "string" && fix.trim()) {
+    return fix;
+  }
+  if (typeof listener?.last_error === "string" && listener.last_error.trim()) {
+    return listener.last_error;
+  }
+  return "причина не указана. Откройте диагностику listener.log.";
+}
+
 export function MinimalUI({
   state,
   onScreen,
@@ -570,7 +607,7 @@ function ControlPanel({
   const wakeWords = Array.isArray(settings?.wake_words)
     ? settings.wake_words
     : String(settings?.wake_words || "джарвис,чарли,jarvis").split(",").map((word) => word.trim()).filter(Boolean);
-  const listenerReason = listener?.last_error_type || listener?.reason || listener?.failed_check || listener?.last_error || "причина не указана";
+  const listenerReason = listenerReasonText(listener);
   
   let listenerStatusLabel = "Автослушание отключено";
   let statusColor = "rgba(255, 255, 255, 0.4)";

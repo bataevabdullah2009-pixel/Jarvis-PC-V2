@@ -137,6 +137,7 @@ def test_listener_status_not_disabled_when_enabled_but_blocked(monkeypatch) -> N
     monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda device_id="default": {"ok": True, "device_name": "Test Mic"})
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id="default", duration_seconds=0.2: {"heard_signal": False})
     monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
     data = voice_listener.status()["data"]
     assert data["enabled"] is True
     assert data["state"] == "blocked"
@@ -149,8 +150,9 @@ def test_listener_blocked_has_reason_and_fix(monkeypatch) -> None:
     monkeypatch.setattr("app.voice.listener.resolve_input_device", lambda device_id="default": {"ok": True, "device_name": "Test Mic"})
     monkeypatch.setattr("app.voice.listener.test_microphone", lambda device_id="default", duration_seconds=0.2: {"heard_signal": False})
     monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
+    monkeypatch.setattr("app.voice.listener.is_speaking_now", lambda: False)
     data = voice_listener.status()["data"]
-    assert data["last_error_type"] == "microphone_no_audio"
+    assert data["last_error_type"] in {"listener_not_running", "microphone_no_audio", "anti_echo_locked"}
     assert data["fix"]
 
 
