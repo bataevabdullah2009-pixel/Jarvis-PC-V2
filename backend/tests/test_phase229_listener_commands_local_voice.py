@@ -99,7 +99,7 @@ def test_microphone_calibration_shape(monkeypatch) -> None:
 
 
 def test_commands_crud_create_update_delete() -> None:
-    commands_path = CONFIG_DIR / "local_commands_ru.json"
+    commands_path = CONFIG_DIR / "user_commands.json"
     restore = _restore_file(commands_path)
     next(restore)
     try:
@@ -132,7 +132,7 @@ def test_commands_crud_delete() -> None:
 
 
 def test_command_router_uses_custom_command() -> None:
-    commands_path = CONFIG_DIR / "local_commands_ru.json"
+    commands_path = CONFIG_DIR / "user_commands.json"
     restore = _restore_file(commands_path)
     next(restore)
     try:
@@ -228,8 +228,9 @@ def test_ui_has_commands_crud() -> None:
 
 def test_ui_has_local_voice_provider_options() -> None:
     text = (ROOT / "frontend" / "src" / "screens" / "MinimalUI.tsx").read_text(encoding="utf-8")
-    for marker in ["piper_local", "gpt_sovits_local", "xtts_local", "text_only", "Проверить выбранный голос"]:
+    for marker in ["piper_local", "gpt_sovits_local", "xtts_local", "Проверить выбранный голос"]:
         assert marker in text
+    assert '<option value="text_only">text_only</option>' not in text
 
 
 def test_ui_no_mojibake() -> None:

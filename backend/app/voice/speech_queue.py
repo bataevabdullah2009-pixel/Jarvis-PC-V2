@@ -39,8 +39,16 @@ class SpeechQueue:
         """Submit a new TTS task. Cancels any active or pending tasks first."""
         logger.info("[QUEUE] Submitting new TTS task command_id=%s text='%s'", command_id, text[:50])
 
-        # 1. Stop current audio playback immediately
-        stop_all_audio()
+        with self._lock:
+            has_active_audio = bool(
+                self._current_task
+                or not self._queue.empty()
+                or self._last_job_status in {"queued", "started", "playing"}
+            )
+
+        # 1. Stop current audio playback only when there is something to interrupt.
+        if has_active_audio:
+            stop_all_audio()
 
         # 2. Cancel the current processing (signal cancellation)
         self._cancel_event.set()

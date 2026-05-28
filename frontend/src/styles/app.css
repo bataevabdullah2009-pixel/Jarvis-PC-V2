@@ -439,6 +439,28 @@ h3 {
   padding: 0 14px;
 }
 
+.voice-only-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  border-radius: 8px;
+  background: rgba(12, 20, 34, 0.78);
+  color: var(--text);
+}
+
+.voice-only-panel strong,
+.voice-only-panel span {
+  display: block;
+}
+
+.voice-only-panel span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .command-form button,
 .wide-button,
 .small-button,

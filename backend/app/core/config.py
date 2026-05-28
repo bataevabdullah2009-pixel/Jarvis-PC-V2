@@ -122,6 +122,14 @@ def _mask_secret(value: str | None) -> str:
 
 BUILT_IN_FISH_AUDIO_VOICE_PROFILES: list[dict[str, Any]] = [
     {
+        "id": "statham",
+        "name": "Statham",
+        "provider": "fish_audio",
+        "voice_id": "205c5c4aadde43d2809636ad19773e6c",
+        "tone": "serious",
+        "enabled": True,
+    },
+    {
         "id": "optimus_prime",
         "name": "Optimus Prime",
         "provider": "fish_audio",
@@ -135,6 +143,14 @@ BUILT_IN_FISH_AUDIO_VOICE_PROFILES: list[dict[str, Any]] = [
         "provider": "fish_audio",
         "voice_id": "54a325e8638f4588bf04ea882f6e2aef",
         "tone": "friendly",
+        "enabled": True,
+    },
+    {
+        "id": "piper_ruslan",
+        "name": "Piper Ruslan",
+        "provider": "piper_local",
+        "voice_id": "ru_RU-ruslan-medium",
+        "tone": "fast",
         "enabled": True,
     },
 ]
@@ -456,8 +472,8 @@ class Settings:
     voice_provider: str = "fish_audio"
     local_tts_provider: str = "piper"
     piper_enabled: bool = False
-    piper_model_path: str = "models/piper/ru_RU.onnx"
-    piper_config_path: str = "models/piper/ru_RU.onnx.json"
+    piper_model_path: str = "models/piper/ru_RU-ruslan-medium.onnx"
+    piper_config_path: str = "models/piper/ru_RU-ruslan-medium.onnx.json"
     piper_exe_path: str = ""
     piper_speaker_id: str = ""
     xtts_enabled: bool = False

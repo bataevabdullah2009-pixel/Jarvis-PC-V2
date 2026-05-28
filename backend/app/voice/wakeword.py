@@ -17,6 +17,12 @@ _PREFIX_WORDS = {
     "РЅСѓ",
 }
 
+_WAKE_WORD_ALIASES = {
+    "джарвис": ["жарвис", "джервис", "джар вис"],
+    "чарли": ["чарльз", "чали", "чарле"],
+    "jarvis": ["jervis"],
+}
+
 
 def normalize_text(text: str) -> str:
     value = (text or "").strip().lower()
@@ -34,7 +40,13 @@ def _normalize_words(wake_words: list[str] | tuple[str, ...] | str | None) -> li
     else:
         raw_words = list(wake_words)
     normalized = [normalize_text(str(word)) for word in raw_words]
-    return [word for word in normalized if word]
+    expanded: list[str] = []
+    for word in normalized:
+        if not word:
+            continue
+        expanded.append(word)
+        expanded.extend(_WAKE_WORD_ALIASES.get(word, []))
+    return list(dict.fromkeys(expanded))
 
 
 def extract_wake_command(transcript: str, wake_words: list[str]) -> dict[str, Any]:

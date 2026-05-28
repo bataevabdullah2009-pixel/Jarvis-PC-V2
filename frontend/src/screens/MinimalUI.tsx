@@ -14,7 +14,6 @@ import {
   Play,
   Plus,
   Save,
-  Send,
   Settings,
   SlidersHorizontal,
   Sparkles,
@@ -85,7 +84,7 @@ const navItems: Array<{ screen: Screen; label: string; icon: typeof Home }> = [
   { screen: "diagnostics", label: "Диагностика", icon: Activity }
 ];
 
-const quickCommands = ["Я вернулся", "Рабочий режим", "Проверить микрофон", "Проверить голос", "Добавить команду"];
+const quickCommands = ["Проверить микрофон", "Проверить голос", "Добавить команду"];
 
 const statusLabel = {
   ready: "Готов",
@@ -148,7 +147,6 @@ export function MinimalUI({
   onDiagnostics,
   onPatchSettings
 }: Props) {
-  const [command, setCommand] = useState("");
   const [localSettings, setLocalSettings] = useState<LocalSettings>(() => loadLocalSettings());
   const [savedText, setSavedText] = useState("Сохранено локально");
   const [selectedDevice, setSelectedDevice] = useState(() => localStorage.getItem("selected_device_id") || "default");
@@ -245,14 +243,6 @@ export function MinimalUI({
 
     setSavedText("Сохранено в Jarvis");
     await onRefresh();
-  };
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const text = command.trim();
-    if (!text) return;
-    setCommand("");
-    await onCommand(text);
   };
 
   const openrouterStatus = useMemo(() => {
@@ -480,12 +470,13 @@ export function MinimalUI({
 
               <HistoryPanel state={state} compact />
 
-              <form className="command-form" onSubmit={submit}>
-                <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Введите команду" />
-                <button type="submit" title="Отправить">
-                  <Send size={18} />
-                </button>
-              </form>
+              <div className="voice-only-panel">
+                <Mic size={18} />
+                <div>
+                  <strong>Голосовое управление активно</strong>
+                  <span>Скажите “Джарвис”, затем команду. Текстовый ввод на главном экране отключён.</span>
+                </div>
+              </div>
 
               <div className="quick-actions">
                 {quickCommands.map((item) => (
@@ -496,7 +487,6 @@ export function MinimalUI({
                       if (item === "Проверить микрофон") onTestMicrophone(selectedDevice);
                       else if (item === "Проверить голос") onTestVoice();
                       else if (item === "Добавить команду") onScreen("myCommands");
-                      else onCommand(item);
                     }}
                   >
                     {item}
@@ -1293,7 +1283,6 @@ function VoicesPanel({
             <option value="xtts_local">xtts_local</option>
             <option value="gpt_sovits_local">gpt_sovits_local</option>
             <option value="rvc_converter">rvc_converter</option>
-            <option value="text_only">text_only</option>
           </select>
         </label>
         {!isBuiltInFishProfile && (

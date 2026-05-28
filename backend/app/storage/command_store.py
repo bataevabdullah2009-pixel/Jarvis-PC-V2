@@ -8,17 +8,18 @@ from typing import Any
 from app.core.config import CONFIG_DIR
 
 
-COMMANDS_PATH = CONFIG_DIR / "local_commands_ru.json"
+BUILTIN_COMMANDS_PATH = CONFIG_DIR / "local_commands_ru.json"
+USER_COMMANDS_PATH = CONFIG_DIR / "user_commands.json"
 
 
 def _now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 
-def _read_store() -> dict[str, Any]:
-    if not COMMANDS_PATH.exists():
+def _read_store(path: Any) -> dict[str, Any]:
+    if not path.exists():
         return {"commands": []}
-    with COMMANDS_PATH.open("r", encoding="utf-8") as file:
+    with path.open("r", encoding="utf-8") as file:
         data = json.load(file)
     if not isinstance(data, dict):
         return {"commands": []}
@@ -28,14 +29,14 @@ def _read_store() -> dict[str, Any]:
     return data
 
 
-def _write_store(data: dict[str, Any]) -> None:
+def _write_user_store(data: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with COMMANDS_PATH.open("w", encoding="utf-8", newline="\n") as file:
+    with USER_COMMANDS_PATH.open("w", encoding="utf-8", newline="\n") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
         file.write("\n")
 
 
-def normalize_command(command: dict[str, Any]) -> dict[str, Any]:
+def normalize_command(command: dict[str, Any], *, source: str | None = None) -> dict[str, Any]:
     command_id = str(command.get("id") or str(uuid4()))
     title = str(command.get("title") or command.get("name") or command_id)
     phrases = command.get("phrases") or command.get("triggers") or []
@@ -57,6 +58,8 @@ def normalize_command(command: dict[str, Any]) -> dict[str, Any]:
     if action_type == "run_shell":
         confirm_required = True
     enabled = bool(command.get("enabled", True))
+    command_source = source or str(command.get("source") or "user")
+    readonly = bool(command.get("readonly", command_source == "built_in"))
     return {
         **command,
         "id": command_id,
@@ -73,43 +76,74 @@ def normalize_command(command: dict[str, Any]) -> dict[str, Any]:
         "confirmation_required": confirm_required,
         "created_at": created_at,
         "updated_at": updated_at,
+        "source": command_source,
+        "readonly": readonly,
     }
 
 
 def get_commands() -> dict[str, Any]:
-    data = _read_store()
-    data["commands"] = [normalize_command(command) for command in data.get("commands", []) if isinstance(command, dict)]
+    builtin_data = _read_store(BUILTIN_COMMANDS_PATH)
+    user_data = _read_store(USER_COMMANDS_PATH)
+    builtin_commands = [
+        normalize_command(command, source="built_in")
+        for command in builtin_data.get("commands", [])
+        if isinstance(command, dict)
+    ]
+    user_commands = [
+        normalize_command(command, source="user")
+        for command in user_data.get("commands", [])
+        if isinstance(command, dict)
+    ]
+    return {
+        "commands": [*builtin_commands, *user_commands],
+        "builtin_count": len(builtin_commands),
+        "user_count": len(user_commands),
+        "builtin_path": str(BUILTIN_COMMANDS_PATH),
+        "user_path": str(USER_COMMANDS_PATH),
+    }
+
+
+def get_user_commands() -> dict[str, Any]:
+    data = _read_store(USER_COMMANDS_PATH)
+    data["commands"] = [
+        normalize_command(command, source="user")
+        for command in data.get("commands", [])
+        if isinstance(command, dict)
+    ]
     return data
 
 
 def create_command(payload: dict[str, Any]) -> dict[str, Any]:
-    data = get_commands()
-    command = normalize_command({**payload, "id": payload.get("id") or str(uuid4()), "created_at": _now_iso(), "updated_at": _now_iso()})
-    existing_ids = {item["id"] for item in data["commands"]}
+    user_data = get_user_commands()
+    command = normalize_command(
+        {**payload, "id": payload.get("id") or str(uuid4()), "created_at": _now_iso(), "updated_at": _now_iso(), "source": "user", "readonly": False},
+        source="user",
+    )
+    existing_ids = {item["id"] for item in get_commands()["commands"]}
     if command["id"] in existing_ids:
         command["id"] = str(uuid4())
-    data["commands"].append(command)
-    _write_store(data)
+    user_data["commands"].append(command)
+    _write_user_store({"commands": user_data["commands"]})
     return command
 
 
 def update_command(command_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
-    data = get_commands()
-    for index, command in enumerate(data["commands"]):
+    user_data = get_user_commands()
+    for index, command in enumerate(user_data["commands"]):
         if command["id"] != command_id:
             continue
-        updated = normalize_command({**command, **patch, "id": command_id, "updated_at": _now_iso()})
-        data["commands"][index] = updated
-        _write_store(data)
+        updated = normalize_command({**command, **patch, "id": command_id, "updated_at": _now_iso(), "source": "user", "readonly": False}, source="user")
+        user_data["commands"][index] = updated
+        _write_user_store({"commands": user_data["commands"]})
         return updated
     return None
 
 
 def delete_command(command_id: str) -> bool:
-    data = get_commands()
-    before = len(data["commands"])
-    data["commands"] = [command for command in data["commands"] if command["id"] != command_id]
-    if len(data["commands"]) == before:
+    user_data = get_user_commands()
+    before = len(user_data["commands"])
+    user_data["commands"] = [command for command in user_data["commands"] if command["id"] != command_id]
+    if len(user_data["commands"]) == before:
         return False
-    _write_store(data)
+    _write_user_store({"commands": user_data["commands"]})
     return True

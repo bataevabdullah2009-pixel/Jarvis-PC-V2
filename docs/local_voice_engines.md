@@ -8,19 +8,18 @@ The launcher does not install heavy voice models automatically.
 Piper is the lightest optional local TTS path.
 
 1. Run `tools/voice_engines/install_piper.ps1`.
-2. Download a Piper voice `.onnx` file and the matching `.onnx.json` config.
-3. Put both files into `models/piper`.
-4. Configure `.env`:
+2. The script downloads `ru_RU-ruslan-medium.onnx` and the matching config into `models/piper`.
+3. Configure `.env` if the script did not already do it:
 
 ```env
 JARVIS_PIPER_ENABLED=true
-JARVIS_PIPER_MODEL_PATH=models/piper/ru_RU.onnx
-JARVIS_PIPER_CONFIG_PATH=models/piper/ru_RU.onnx.json
+JARVIS_PIPER_MODEL_PATH=models/piper/ru_RU-ruslan-medium.onnx
+JARVIS_PIPER_CONFIG_PATH=models/piper/ru_RU-ruslan-medium.onnx.json
 JARVIS_PIPER_EXE_PATH=C:\path\to\piper.exe
 JARVIS_PIPER_SPEAKER_ID=
 ```
 
-Then open the Jarvis voice profile UI and select `piper_local`.
+Then open the Jarvis voice profile UI and select `Piper Ruslan`.
 If the model, config, or executable is missing, Jarvis returns a structured diagnostic instead of crashing.
 
 ## GPT-SoVITS

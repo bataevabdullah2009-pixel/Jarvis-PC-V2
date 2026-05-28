@@ -207,7 +207,7 @@ class AssistantOrchestrator:
                         "async": True,
                         "spoken": False,
                         "played": False,
-                        "ok": False,
+                        "ok": True,
                         "audio_available": False,
                         "pending_audio": True,
                         "status": "queued",

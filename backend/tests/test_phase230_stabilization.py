@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -217,6 +218,21 @@ def test_listener_safe_start_does_not_block_quiet_room(monkeypatch) -> None:
     assert result["checks"]["microphone_heard_signal"] is False
 
 
+def test_listener_status_reports_cooldown_when_cooldown_until_active() -> None:
+    from app.voice.listener import voice_listener
+
+    voice_listener.state = "listening_for_wake_word"
+    voice_listener._thread = type("Thread", (), {"is_alive": lambda self: True})()
+    voice_listener.cooldown_until = time.time() + 5
+    try:
+        data = voice_listener.status()["data"]
+        assert data["state"] == "cooldown"
+    finally:
+        voice_listener._thread = None
+        voice_listener.cooldown_until = 0
+        voice_listener.state = "stopped"
+
+
 def test_wakeword_ignores_without_name() -> None:
     assert extract_wake_command("как дела", ["джарвис", "чарли", "jarvis"])["triggered"] is False
 
@@ -224,6 +240,13 @@ def test_wakeword_ignores_without_name() -> None:
 def test_wakeword_accepts_jarvis_command() -> None:
     result = extract_wake_command("Джарвис, как дела", ["джарвис", "чарли", "jarvis"])
     assert result == {"triggered": True, "wake_word": "джарвис", "command_text": "как дела", "reason": "wake_word_found"}
+
+
+def test_wakeword_accepts_charlie_stt_alias() -> None:
+    result = extract_wake_command("чарльз как дела", ["джарвис", "чарли", "jarvis"])
+    assert result["triggered"] is True
+    assert result["wake_word"] == "чарльз"
+    assert result["command_text"] == "как дела"
 
 
 def test_anti_echo_blocks_self_audio() -> None:
@@ -237,7 +260,7 @@ def test_anti_echo_blocks_self_audio() -> None:
 
 
 def test_commands_crud_create() -> None:
-    path = CONFIG_DIR / "local_commands_ru.json"
+    path = CONFIG_DIR / "user_commands.json"
     restore = _restore(path)
     next(restore)
     try:
@@ -252,7 +275,7 @@ def test_commands_crud_create() -> None:
 
 
 def test_commands_crud_update() -> None:
-    path = CONFIG_DIR / "local_commands_ru.json"
+    path = CONFIG_DIR / "user_commands.json"
     restore = _restore(path)
     next(restore)
     try:
@@ -267,7 +290,7 @@ def test_commands_crud_update() -> None:
 
 
 def test_commands_crud_delete() -> None:
-    path = CONFIG_DIR / "local_commands_ru.json"
+    path = CONFIG_DIR / "user_commands.json"
     restore = _restore(path)
     next(restore)
     try:
@@ -282,7 +305,7 @@ def test_commands_crud_delete() -> None:
 
 
 def test_command_router_uses_custom_command() -> None:
-    path = CONFIG_DIR / "local_commands_ru.json"
+    path = CONFIG_DIR / "user_commands.json"
     restore = _restore(path)
     next(restore)
     try:
@@ -297,6 +320,33 @@ def test_command_router_uses_custom_command() -> None:
             pass
 
 
+def test_commands_crud_does_not_rewrite_builtin_commands() -> None:
+    builtin_path = CONFIG_DIR / "local_commands_ru.json"
+    user_path = CONFIG_DIR / "user_commands.json"
+    builtin_before = builtin_path.read_text(encoding="utf-8")
+    restore = _restore(user_path)
+    next(restore)
+    try:
+        created = client.post("/commands", json={"title": "No rewrite", "phrases": ["no rewrite"], "action_type": "speak", "action_value": "ok"}).json()["data"]
+        assert created["source"] == "user"
+        assert created["readonly"] is False
+        assert builtin_path.read_text(encoding="utf-8") == builtin_before
+    finally:
+        try:
+            next(restore)
+        except StopIteration:
+            pass
+
+
+def test_voice_profiles_include_requested_fish_and_piper_profiles() -> None:
+    settings = Settings.load()
+    profiles = {profile["id"]: profile for profile in settings.voice_profiles}
+    assert profiles["statham"]["voice_id"] == "205c5c4aadde43d2809636ad19773e6c"
+    assert profiles["optimus_prime"]["voice_id"] == "581fdc4e41954da19ea0221db8ec0c78"
+    assert profiles["tony_stark"]["voice_id"] == "54a325e8638f4588bf04ea882f6e2aef"
+    assert profiles["piper_ruslan"]["provider"] == "piper_local"
+
+
 def test_tts_job_reaches_final_status() -> None:
     class FakeTTS:
         def speak(self, text: str, *, dry_run: bool = False, blocking: bool = False) -> dict[str, Any]:
@@ -305,6 +355,22 @@ def test_tts_job_reaches_final_status() -> None:
     speech_queue.submit("phase230_tts", "test", "hello", FakeTTS())
     speech_queue._queue.join()
     assert speech_queue.status()["last_job_status"] in {"played", "failed", "text_only", "cancelled"}
+
+
+def test_tts_queue_does_not_stop_audio_when_idle(monkeypatch) -> None:
+    from app.voice.speech_queue import SpeechQueue
+
+    queue = SpeechQueue()
+    calls = {"stop": 0}
+    monkeypatch.setattr("app.voice.speech_queue.stop_all_audio", lambda: calls.__setitem__("stop", calls["stop"] + 1))
+
+    class FakeTTS:
+        def speak(self, text: str, *, dry_run: bool = False, blocking: bool = False) -> dict[str, Any]:
+            return {"ok": True, "provider": "text_only", "status": "text_only", "played": False, "spoken": False}
+
+    queue.submit("idle_fast", "test", "hello", FakeTTS())
+    queue._queue.join()
+    assert calls["stop"] == 0
 
 
 def test_tts_queued_result_is_not_marked_failed() -> None:
@@ -367,3 +433,9 @@ def test_ui_has_commands_crud() -> None:
     assert "api.createCommand" in text
     assert "api.updateCommand" in text
     assert "api.deleteCommand" in text
+
+
+def test_ui_home_is_voice_first_without_text_command_form() -> None:
+    text = (ROOT / "frontend" / "src" / "screens" / "MinimalUI.tsx").read_text(encoding="utf-8")
+    assert "voice-only-panel" in text
+    assert "Введите команду" not in text

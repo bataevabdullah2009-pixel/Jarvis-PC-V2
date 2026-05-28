@@ -293,17 +293,18 @@ class SpeechOrchestrator:
             timeout_failure = (fish_error_type == "fish_timeout") or ("timeout" in str(last_error).lower())
             if timeout_failure:
                 logger.warning("[SPEECH] Fish voice timed out. Trying emergency local fallback instead of staying silent.")
-                fallback_result = self._try_provider("pyttsx3", safe_text, dry_run, blocking=blocking)
-                if fallback_result and fallback_result.get("ok"):
-                    _LAST_TTS_ERROR = str(last_error)
-                    _LAST_TTS_ERROR_TYPE = fish_error_type or "fish_audio_unavailable"
-                    _LAST_PROVIDER_USED = "pyttsx3"
-                    fallback_result["fallback_used"] = True
-                    fallback_result["voice_locked_degraded"] = True
-                    fallback_result["warning"] = "Fish Audio timed out; emergency system voice was used so Jarvis still speaks."
-                    fallback_result["fix"] = primary_fix
-                    fallback_result["latency_ms"] = int((time.perf_counter() - started) * 1000)
-                    return fallback_result
+                for emergency_provider in ("piper_local", "pyttsx3"):
+                    fallback_result = self._try_provider(emergency_provider, safe_text, dry_run, blocking=blocking)
+                    if fallback_result and fallback_result.get("ok"):
+                        _LAST_TTS_ERROR = str(last_error)
+                        _LAST_TTS_ERROR_TYPE = fish_error_type or "fish_audio_unavailable"
+                        _LAST_PROVIDER_USED = emergency_provider
+                        fallback_result["fallback_used"] = True
+                        fallback_result["voice_locked_degraded"] = True
+                        fallback_result["warning"] = f"Fish Audio timed out; emergency {emergency_provider} voice was used so Jarvis still speaks."
+                        fallback_result["fix"] = primary_fix
+                        fallback_result["latency_ms"] = int((time.perf_counter() - started) * 1000)
+                        return fallback_result
             logger.info("[SPEECH] tts_require_fish_audio is True. Skipping non-Fish fallbacks.")
             res = self._text_only(safe_text, f"Primary voice {primary} failed and other voice providers are disallowed by tts_require_fish_audio.", started, primary_fix)
             res["provider"] = "text_only"

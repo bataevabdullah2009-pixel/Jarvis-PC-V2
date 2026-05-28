@@ -413,7 +413,9 @@ class VoiceListener:
             gate_res = {"safe_to_start": True, "failed_check": None, "fix": None, "checks": {"listener_running": True}}
 
         display_state = self.state
-        if not settings.listener_enabled and not running and self.state not in {"blocked", "error"}:
+        if running and self.cooldown_until > time.time():
+            display_state = "cooldown"
+        elif not settings.listener_enabled and not running and self.state not in {"blocked", "error"}:
             display_state = "stopped"
         elif settings.listener_enabled and settings.listener_autostart and not running:
             display_state = "blocked"

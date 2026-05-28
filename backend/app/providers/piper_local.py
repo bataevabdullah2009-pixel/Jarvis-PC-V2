@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import tempfile
 import time
@@ -14,7 +15,13 @@ def _resolve_path(path_value: str) -> Path:
     path = Path(path_value)
     if path.is_absolute():
         return path
-    return PROJECT_ROOT / path
+    primary = PROJECT_ROOT / path
+    if primary.exists():
+        return primary
+    parent_candidate = PROJECT_ROOT.parent / path
+    if PROJECT_ROOT.name.lower() == "backend" and parent_candidate.exists():
+        return parent_candidate
+    return primary
 
 
 class PiperLocalTTS:
@@ -26,7 +33,8 @@ class PiperLocalTTS:
     def status(self) -> dict[str, Any]:
         model_path = _resolve_path(self.settings.piper_model_path)
         config_path = _resolve_path(self.settings.piper_config_path)
-        exe_path = Path(self.settings.piper_exe_path) if self.settings.piper_exe_path else None
+        exe_candidate = self.settings.piper_exe_path.strip() or shutil.which("piper") or shutil.which("piper.exe") or ""
+        exe_path = Path(exe_candidate) if exe_candidate else None
         package_exists = importlib.util.find_spec("piper") is not None or importlib.util.find_spec("piper_phonemize") is not None
         exe_exists = bool(exe_path and exe_path.exists())
         model_exists = model_path.exists()
@@ -37,6 +45,7 @@ class PiperLocalTTS:
             "available": available,
             "model_path": str(model_path),
             "config_path": str(config_path),
+            "exe_path": str(exe_path) if exe_path else "",
             "model_exists": model_exists,
             "config_exists": config_exists,
             "package_exists": package_exists,
@@ -55,7 +64,7 @@ class PiperLocalTTS:
         if not status["available"]:
             return self._failure(text, "piper_not_installed", "Piper executable/package is missing.", status, started)
 
-        exe = self.settings.piper_exe_path.strip()
+        exe = str(status.get("exe_path") or self.settings.piper_exe_path.strip())
         if not exe:
             return self._failure(text, "piper_exe_missing", "Set JARVIS_PIPER_EXE_PATH for local playback.", status, started)
 
