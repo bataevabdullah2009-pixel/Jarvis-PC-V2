@@ -4,12 +4,23 @@ import re
 from typing import Any
 
 
-_PREFIX_WORDS = {"эй", "hey", "ок", "okay", "слушай", "ну"}
+_PREFIX_WORDS = {
+    "\u044d\u0439",
+    "hey",
+    "\u043e\u043a",
+    "okay",
+    "\u0441\u043b\u0443\u0448\u0430\u0439",
+    "\u043d\u0443",
+    "СЌР№",
+    "РѕРє",
+    "СЃР»СѓС€Р°Р№",
+    "РЅСѓ",
+}
 
 
 def normalize_text(text: str) -> str:
     value = (text or "").strip().lower()
-    value = value.replace("ё", "е")
+    value = value.replace("\u0451", "\u0435").replace("С‘", "Рµ")
     value = re.sub(r"[^\w\s-]+", " ", value, flags=re.UNICODE)
     value = re.sub(r"\s+", " ", value).strip()
     return value

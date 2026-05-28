@@ -82,9 +82,11 @@ def build_info(settings: Settings) -> dict[str, Any]:
         "built_at": built_at,
         "running_from_source": not frozen,
         "packaged": frozen,
+        "backend_path": str(Path(__file__).resolve().parents[2]),
+        "backend_url": f"http://127.0.0.1:{os.getenv('JARVIS_BACKEND_PORT', '18000')}",
+        "packaged_source_mode": "packaged" if frozen else "source",
         "backend_executable_path": sys.executable if frozen else sys.argv[0],
         "frontend_mode": frontend_mode,
         "build_info_found": build_info_found
     }
-
 

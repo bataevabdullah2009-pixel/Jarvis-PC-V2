@@ -17,6 +17,7 @@ _cooldown_until: float = 0.0
 _last_tts_text: str = ""
 _consecutive_echo_count: int = 0
 _self_echo_loop_triggered: bool = False
+_self_echo_blocked_until: float = 0.0
 
 
 def mark_tts_started(text: str) -> None:
@@ -89,7 +90,12 @@ def should_ignore_transcript(transcript: str) -> dict[str, Any]:
     Checks if the transcript should be ignored to prevent audio echo.
     Returns a dict with key indicators.
     """
-    global _consecutive_echo_count, _self_echo_loop_triggered
+    global _consecutive_echo_count, _self_echo_loop_triggered, _self_echo_blocked_until
+
+    if _self_echo_loop_triggered and _self_echo_blocked_until and time.time() >= _self_echo_blocked_until:
+        _self_echo_loop_triggered = False
+        _self_echo_blocked_until = 0.0
+        _consecutive_echo_count = 0
 
     if not get_settings().ignore_self_audio:
         return {
@@ -142,6 +148,7 @@ def should_ignore_transcript(transcript: str) -> dict[str, Any]:
         stop_listener = False
         if _consecutive_echo_count >= 3:
             _self_echo_loop_triggered = True
+            _self_echo_blocked_until = time.time() + 30.0
             stop_listener = True
             logger.critical("[ANTI-ECHO] %s", SELF_ECHO_FIX)
 

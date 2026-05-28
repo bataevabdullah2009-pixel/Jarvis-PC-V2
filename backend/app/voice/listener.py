@@ -4,11 +4,12 @@ import time
 import logging
 import asyncio
 import threading
+import traceback
 from typing import Any, Dict, List
 from datetime import datetime
-from app.core.config import get_settings
+from app.core.config import LOG_DIR, get_settings
 from app.events.websocket_bus import event_bus
-from app.voice.microphone import capture_audio, resolve_input_device, test_microphone, VoiceDependencyError
+from app.voice.microphone import capture_audio, diagnose_microphone_error, resolve_input_device, test_microphone, VoiceDependencyError
 from app.voice.stt import STTService, stt_dependency_status
 from app.voice.anti_echo import (
     should_ignore_transcript,
@@ -83,6 +84,21 @@ class VoiceListener:
     def _inc_metric(self, key: str, amount: int = 1) -> None:
         self.metrics[key] = int(self.metrics.get(key, 0)) + amount
 
+    def _write_crash_log(self, exc: BaseException) -> None:
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            with (LOG_DIR / "listener.log").open("a", encoding="utf-8", newline="\n") as file:
+                file.write(f"\n[{datetime.utcnow().isoformat()}Z] listener_thread_crashed\n")
+                file.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        except Exception:
+            logger.exception("[LISTENER] Failed to write listener crash log")
+
+    def _resolve_input_device(self, device_id: str = "default") -> dict[str, Any]:
+        try:
+            return resolve_input_device(get_settings(), device_id=device_id)
+        except TypeError:
+            return resolve_input_device(device_id)
+
     def check_safe_start(self, device_id: str = "default") -> dict[str, Any]:
         """
         Performs all gate checks required for safe listener startup.
@@ -95,11 +111,11 @@ class VoiceListener:
 
         # 2. Selected device exists
         try:
-            dev_res = resolve_input_device(device_id)
+            dev_res = self._resolve_input_device(device_id)
         except Exception as exc:
             message = str(exc)
             permission_markers = ("permission", "access", "denied", "privacy", "разреш")
-            error_type = "microphone_permission_denied" if any(marker in message.lower() for marker in permission_markers) else "device_not_found"
+            error_type = "microphone_permission_denied" if any(marker in message.lower() for marker in permission_markers) else "microphone_device_not_found"
             return {
                 "safe_to_start": False,
                 "failed_check": error_type,
@@ -120,6 +136,10 @@ class VoiceListener:
                 microphone_heard_signal = bool(test_res.get("heard_signal", False))
             except Exception as e:
                 logger.error("[LISTENER] Microphone test exception: %s", e)
+                diagnosis = diagnose_microphone_error(e)
+                self.last_error_type = diagnosis["error_type"]
+                self.last_error = diagnosis["error"]
+                self.fix = diagnosis["fixes"][0]
                 microphone_ok = False
 
         # 4. STT configured
@@ -154,11 +174,14 @@ class VoiceListener:
 
         if not safe_to_start:
             if not device_exists:
-                failed_check = "device_not_found"
+                failed_check = dev_res.get("error_type") or "microphone_device_not_found"
                 fix = dev_res.get("fix") or f"Выбранное устройство '{device_id}' не найдено."
             elif not microphone_ok:
-                failed_check = "microphone_capture_failed"
+                failed_check = self.last_error_type or "microphone_open_failed"
                 fix = "Микрофон выбран, но сигнал не слышен. Проверьте чувствительность Windows, разрешение микрофона и выбранное устройство."
+            elif not microphone_heard_signal:
+                failed_check = "microphone_no_audio"
+                fix = "Microphone opened, but no input signal was detected. Check Windows input level or choose another device."
             elif not stt_configured:
                 offline = stt_conf.get("offline", {}) if isinstance(stt_conf, dict) else {}
                 if offline.get("vosk_available") and not offline.get("model_configured"):
@@ -219,11 +242,12 @@ class VoiceListener:
             self.warnings = []
 
             # Resolve device info first
-            dev_res = resolve_input_device(device_id)
+            dev_res = self._resolve_input_device(device_id)
             if not dev_res["ok"]:
-                self.block("device_not_found", dev_res["fix"], dev_res["fix"] or "Selected input device not found.")
+                self.block(dev_res.get("error_type") or "microphone_device_not_found", dev_res["fix"], dev_res["fix"] or "Selected input device not found.")
                 return self.status()
 
+            self.device_id = str(dev_res.get("device_id") if dev_res.get("device_id") is not None else device_id)
             self.device_name = dev_res["device_name"]
 
             if clap_enabled:
@@ -354,13 +378,13 @@ class VoiceListener:
             gate_res = {"safe_to_start": True, "failed_check": None, "fix": None, "checks": {"listener_running": True}}
 
         display_state = self.state
-        if not settings.listener_enabled and not running:
+        if not settings.listener_enabled and not running and self.state not in {"blocked", "error"}:
             display_state = "stopped"
         elif settings.listener_enabled and settings.listener_autostart and not running:
             display_state = "blocked"
             if not self.last_error_type:
                 self._inc_metric("stops_without_reason")
-                self.last_error_type = gate_res["failed_check"] or "listener_thread_crashed"
+                self.last_error_type = gate_res["failed_check"] or "listener_not_running"
                 self.last_error = self.last_error or "Listener is enabled but no background worker is running."
                 self.fix = self.fix or gate_res["fix"] or "Restart the listener from UI or POST /voice/listener-start."
 
@@ -471,9 +495,23 @@ class VoiceListener:
             try:
                 # Continuous audio window capture
                 self.process_audio_window()
+            except VoiceDependencyError as exc:
+                details = exc.details if isinstance(exc.details, dict) else {}
+                diagnosis = diagnose_microphone_error(exc)
+                error_type = details.get("error_type") or diagnosis["error_type"]
+                fixes = details.get("fixes") or diagnosis["fixes"]
+                self.block(error_type, fixes[0] if fixes else str(exc), str(exc))
+                break
             except Exception as e:
                 logger.exception("[LISTENER] Error during process_audio_window: %s", e)
-                time.sleep(0.5)
+                self._write_crash_log(e)
+                self.state = "error"
+                self.last_error_type = "listener_thread_crashed"
+                self.last_error = str(e)
+                self.fix = "Откройте diagnostics/logs/listener.log, исправьте причину падения и перезапустите listener."
+                self.errors.append(self.last_error)
+                event_bus.emit("voice.listener.state", {"state": self.state})
+                break
 
     def process_audio_window(self) -> None:
         """Captures a short window of audio to detect clap or wake words."""
@@ -492,12 +530,10 @@ class VoiceListener:
         except VoiceDependencyError as ex:
             logger.error("[LISTENER] Audio capture failed: %s", ex)
             self._inc_metric("no_audio_events")
-            time.sleep(0.5)
-            return
+            raise
         except Exception as ex:
             logger.error("[LISTENER] Audio capture exception: %s", ex)
-            time.sleep(0.5)
-            return
+            raise
 
         # Check silent inputs
         if capture.rms < settings.min_rms_threshold:

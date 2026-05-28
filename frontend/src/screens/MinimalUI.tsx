@@ -472,6 +472,7 @@ export function MinimalUI({
               state={state}
               onPatchSettings={onPatchSettings}
               onRefresh={onRefresh}
+              onTestMicrophone={onTestMicrophone}
               selectedDevice={selectedDevice}
               onDeviceChange={handleDeviceChange}
             />
@@ -545,12 +546,14 @@ function ControlPanel({
   state,
   onPatchSettings,
   onRefresh,
+  onTestMicrophone,
   selectedDevice,
   onDeviceChange
 }: {
   state: AppState;
   onPatchSettings: Props["onPatchSettings"];
   onRefresh: Props["onRefresh"];
+  onTestMicrophone: Props["onTestMicrophone"];
   selectedDevice: string;
   onDeviceChange: (id: string) => void;
 }) {
@@ -662,6 +665,10 @@ function ControlPanel({
       </div>
 
       <ToggleRow label="Автослушание 24/7" checked={Boolean(settings?.listener_enabled && settings?.listener_autostart)} onChange={handleToggleAutolisten} />
+      <button className="secondary-button" type="button" onClick={() => onTestMicrophone(selectedDevice)}>
+        <Wrench size={16} />
+        Проверить микрофон
+      </button>
       <label className="field-row">
         <span>Микрофон</span>
         <select value={selectedDevice} onChange={(event) => onDeviceChange(event.target.value)}>

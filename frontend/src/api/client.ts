@@ -186,6 +186,20 @@ export type TestCaptureData = {
   fix: string | null;
 };
 
+export type DebugOpenMicrophoneData = {
+  selected_device: Record<string, unknown> | null;
+  opened_device: Record<string, unknown> | null;
+  attempts: Array<Record<string, unknown>>;
+  rms: number;
+  peak: number;
+  speech_rms: number;
+  speech_peak: number;
+  heard_signal: boolean;
+  final_error_type: string | null;
+  final_error: string | null;
+  fixes: string[];
+};
+
 export type SttStatusData = {
   provider: string;
   vosk_available: boolean;
@@ -238,6 +252,10 @@ export type SettingsData = {
   listener_enabled?: boolean;
   listener_autostart?: boolean;
   listener_device_id?: string;
+  listener_device_name?: string;
+  listener_device_hostapi?: string;
+  listener_device_channels?: number;
+  listener_device_samplerate?: number;
   wake_words?: string[] | string;
 };
 
@@ -320,6 +338,9 @@ export type BuildInfoData = {
   frontend_mode?: string;
   running_from_source?: boolean;
   packaged?: boolean;
+  backend_path?: string;
+  backend_url?: string;
+  packaged_source_mode?: string;
   build_info_found?: boolean;
 };
 
@@ -592,6 +613,11 @@ export const api = {
     request<MicrophoneTestData>("/voice/test-microphone", {
       method: "POST",
       body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: 3 })
+    }),
+  debugOpenMicrophone: (deviceId?: string, durationSeconds = 3) =>
+    request<DebugOpenMicrophoneData>("/voice/debug-open-microphone", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: durationSeconds })
     }),
   recordCommand: (deviceId?: string, maxSeconds?: number) =>
     request<RecordCommandResponse>("/voice/record-command", {

@@ -478,6 +478,10 @@ class Settings:
     listener_autostart: bool = True
     wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_WAKE_WORDS))
     listener_device_id: str = "default"
+    listener_device_name: str = ""
+    listener_device_hostapi: str = ""
+    listener_device_channels: int = 1
+    listener_device_samplerate: int = 16000
     command_record_seconds: int = 6
     cooldown_ms: int = 2500
     ignore_self_audio: bool = True
@@ -683,6 +687,16 @@ class Settings:
             wake_words_value = env_value("JARVIS_WAKE_WORDS", "WAKE_WORDS", default=",".join(DEFAULT_WAKE_WORDS))
         settings.wake_words = _split_csv(wake_words_value) or list(DEFAULT_WAKE_WORDS)
         settings.listener_device_id = env_default("listener_device_id", "JARVIS_LISTENER_DEVICE_ID", "LISTENER_DEVICE_ID", default="default") or "default"
+        settings.listener_device_name = env_default("listener_device_name", "JARVIS_LISTENER_DEVICE_NAME", default=settings.listener_device_name) or ""
+        settings.listener_device_hostapi = env_default("listener_device_hostapi", "JARVIS_LISTENER_DEVICE_HOSTAPI", default=settings.listener_device_hostapi) or ""
+        try:
+            settings.listener_device_channels = int(env_default("listener_device_channels", "JARVIS_LISTENER_DEVICE_CHANNELS", default=str(settings.listener_device_channels)) or 1)
+        except ValueError:
+            settings.listener_device_channels = 1
+        try:
+            settings.listener_device_samplerate = int(env_default("listener_device_samplerate", "JARVIS_LISTENER_DEVICE_SAMPLERATE", default=str(settings.listener_device_samplerate)) or 16000)
+        except ValueError:
+            settings.listener_device_samplerate = 16000
         try:
             settings.command_record_seconds = int(env_value("JARVIS_COMMAND_RECORD_SECONDS", "COMMAND_RECORD_SECONDS", default="6") or "6")
         except ValueError:
@@ -780,6 +794,10 @@ class Settings:
             "listener_autostart": self.listener_autostart,
             "wake_words": self.wake_words,
             "listener_device_id": self.listener_device_id,
+            "listener_device_name": self.listener_device_name,
+            "listener_device_hostapi": self.listener_device_hostapi,
+            "listener_device_channels": self.listener_device_channels,
+            "listener_device_samplerate": self.listener_device_samplerate,
             "command_record_seconds": self.command_record_seconds,
             "cooldown_ms": self.cooldown_ms,
             "ignore_self_audio": self.ignore_self_audio,
@@ -817,6 +835,10 @@ def patch_settings(patch: dict[str, Any]) -> Settings:
         "listener_enabled",
         "listener_autostart",
         "listener_device_id",
+        "listener_device_name",
+        "listener_device_hostapi",
+        "listener_device_channels",
+        "listener_device_samplerate",
         "wake_words",
         "voice_profile_id",
         "voice_profiles",

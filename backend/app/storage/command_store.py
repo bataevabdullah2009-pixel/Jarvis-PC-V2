@@ -36,7 +36,7 @@ def _write_store(data: dict[str, Any]) -> None:
 
 
 def normalize_command(command: dict[str, Any]) -> dict[str, Any]:
-    command_id = str(command.get("id") or f"cmd_{uuid4().hex[:12]}")
+    command_id = str(command.get("id") or str(uuid4()))
     title = str(command.get("title") or command.get("name") or command_id)
     phrases = command.get("phrases") or command.get("triggers") or []
     if isinstance(phrases, str):
@@ -84,10 +84,10 @@ def get_commands() -> dict[str, Any]:
 
 def create_command(payload: dict[str, Any]) -> dict[str, Any]:
     data = get_commands()
-    command = normalize_command({**payload, "id": payload.get("id") or f"cmd_{uuid4().hex[:12]}", "created_at": _now_iso(), "updated_at": _now_iso()})
+    command = normalize_command({**payload, "id": payload.get("id") or str(uuid4()), "created_at": _now_iso(), "updated_at": _now_iso()})
     existing_ids = {item["id"] for item in data["commands"]}
     if command["id"] in existing_ids:
-        command["id"] = f"cmd_{uuid4().hex[:12]}"
+        command["id"] = str(uuid4())
     data["commands"].append(command)
     _write_store(data)
     return command

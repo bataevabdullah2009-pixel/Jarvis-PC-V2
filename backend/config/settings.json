@@ -73,5 +73,9 @@
   "ai_primary": "groq",
   "listener_enabled": true,
   "listener_autostart": true,
-  "listener_device_id": "1"
+  "listener_device_id": "default",
+  "listener_device_name": "Микрофон (3- ME6S)",
+  "listener_device_hostapi": "MME",
+  "listener_device_channels": 1,
+  "listener_device_samplerate": 44100
 }

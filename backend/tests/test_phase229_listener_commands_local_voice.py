@@ -48,7 +48,8 @@ def test_listener_enabled_not_stopped_without_reason(monkeypatch) -> None:
     monkeypatch.setattr("app.voice.listener.stt_dependency_status", lambda settings: {"configured": True})
     data = voice_listener.status()["data"]
     assert data["state"] == "blocked"
-    assert data["last_error_type"] in {"microphone_no_audio", "listener_thread_crashed"}
+    assert data["last_error_type"] in {"microphone_no_audio", "microphone_open_failed", "listener_thread_crashed", "listener_not_running", "vosk_model_missing", "stt_not_configured"}
+    assert data["fix"]
     assert data["metrics"]["stops_without_reason"] >= 0
 
 

@@ -1,5 +1,5 @@
 @echo off
 cd /d "%~dp0"
-echo WARNING: For normal use start START_JARVIS.bat
-powershell -NoProfile -ExecutionPolicy Bypass -File "tools\update_and_launch.ps1"
+echo Legacy launcher. Use START_JARVIS.bat
+call START_JARVIS.bat
 pause

@@ -382,7 +382,7 @@ export function App() {
     const devId = deviceId ?? localStorage.getItem("selected_device_id") ?? "default";
     playSound("listening");
     setState((current) => ({ ...current, assistantStatus: "listening", statusText: "Слушаю 3 секунды...", lastError: null }));
-    const response = await api.calibrateMic(devId);
+    const response = await api.debugOpenMicrophone(devId, 3);
     if (!response.ok || !response.data) {
       setState((current) => ({
         ...current,
@@ -395,17 +395,20 @@ export function App() {
     }
 
     const data = response.data;
+    const opened = data.opened_device as any;
+    (data as any).speech_rms = data.rms;
+    (data as any).speech_peak = data.peak;
     setState((current) => ({
       ...current,
       assistantStatus: data.heard_signal ? "ready" : "error",
       statusText: data.heard_signal ? "Готов" : "Ошибка",
       lastMicrophoneTest: {
-        device_id: data.device_id,
-        duration_seconds: 5,
-        sample_rate: 16000,
-        channels: 1,
-        rms: data.speech_rms,
-        peak: data.speech_peak,
+        device_id: String(opened?.id ?? devId),
+        duration_seconds: 3,
+        sample_rate: Number(opened?.default_samplerate ?? 16000),
+        channels: Number(opened?.channels ?? 1),
+        rms: data.rms,
+        peak: data.peak,
         heard_signal: data.heard_signal
       },
       lastError: data.heard_signal ? null : `Микрофон выбран, но сигнал не слышен. RMS ${data.speech_rms.toFixed(5)}, Peak ${data.speech_peak.toFixed(5)}.`

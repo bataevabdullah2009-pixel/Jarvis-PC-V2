@@ -23,7 +23,7 @@ from app.providers.groq import GroqPlanner
 from app.providers.openrouter import OpenRouterPlanner
 from app.scenarios import music, news, welcome_home, workspace
 from app.storage.command_store import create_command, delete_command, get_commands, update_command
-from app.voice.microphone import VoiceDependencyError
+from app.voice.microphone import VoiceDependencyError, debug_open_microphone, resolve_input_device
 from app.voice.tts import TTSService
 from app.voice.speech_orchestrator import last_tts_state
 from app.voice.speech_queue import speech_queue
@@ -195,6 +195,10 @@ class SettingsPatchRequest(BaseModel):
     listener_enabled: bool | None = None
     listener_autostart: bool | None = None
     listener_device_id: str | None = None
+    listener_device_name: str | None = None
+    listener_device_hostapi: str | None = None
+    listener_device_channels: int | None = None
+    listener_device_samplerate: int | None = None
     voice_volume: int | None = Field(default=None, ge=0, le=100)
     offline_mode: bool | None = None
 
@@ -205,6 +209,11 @@ class ScenarioTestRequest(BaseModel):
 
 
 class MicrophoneTestRequest(BaseModel):
+    device_id: str = "default"
+    duration_seconds: float = Field(default=3, gt=0, le=30)
+
+
+class DebugOpenMicrophoneRequest(BaseModel):
     device_id: str = "default"
     duration_seconds: float = Field(default=3, gt=0, le=30)
 
@@ -858,9 +867,38 @@ def debug_test_full_pipeline(request: FullPipelineTestRequest) -> dict[str, Any]
 @app.get("/voice/devices")
 def voice_devices() -> dict[str, Any]:
     try:
-        return envelope(VoicePipeline(get_settings()).devices())
+        settings = get_settings()
+        data = VoicePipeline(settings).devices()
+        data["selected_device_id"] = settings.listener_device_id
+        data["selected_device_name"] = settings.listener_device_name
+        return envelope(data)
     except VoiceDependencyError as exc:
         return envelope(None, ok=False, error=voice_error_response(exc))
+
+
+@app.post("/voice/debug-open-microphone")
+def voice_debug_open_microphone(request: DebugOpenMicrophoneRequest) -> dict[str, Any]:
+    settings = get_settings()
+    data = debug_open_microphone(
+        settings=settings,
+        device_id=request.device_id,
+        duration_seconds=request.duration_seconds,
+    )
+    ok = bool(data.get("opened_device")) and not data.get("final_error_type")
+    return envelope(
+        data,
+        ok=ok,
+        error=None
+        if ok
+        else {
+            "code": "MICROPHONE_DEBUG_OPEN_FAILED",
+            "message": data.get("final_error") or data.get("final_error_type") or "Microphone did not open.",
+            "details": {
+                "error_type": data.get("final_error_type"),
+                "fixes": data.get("fixes") or [],
+            },
+        },
+    )
 
 
 @app.get("/voice/mic-diagnostics")
@@ -1053,6 +1091,15 @@ def voice_listener_status() -> dict[str, Any]:
 
 @app.post("/voice/listener-start")
 def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
+    dev_res = resolve_input_device(get_settings(), device_id=request.device_id)
+    device_patch: dict[str, Any] = {}
+    if dev_res.get("ok"):
+        device_patch = {
+            "listener_device_name": dev_res.get("device_name") or "",
+            "listener_device_hostapi": dev_res.get("hostapi") or "",
+            "listener_device_channels": int(dev_res.get("channels") or 1),
+            "listener_device_samplerate": int(dev_res.get("sample_rate") or 16000),
+        }
     patch_settings(
         {
             "listener_enabled": True,
@@ -1060,6 +1107,7 @@ def voice_listener_start_post(request: ListenerStartRequest) -> dict[str, Any]:
             "listener_device_id": request.device_id,
             "voice_wake_enabled": request.wake_word,
             "clap_enabled": False,
+            **device_patch,
         }
     )
     voice_listener.device_id = request.device_id
