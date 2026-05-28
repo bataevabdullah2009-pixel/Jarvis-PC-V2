@@ -1227,19 +1227,42 @@ def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -
             last_error = None
             fix = None
     else:
-        if state not in {"listening_for_wake_word", "speaking", "cooldown"}:
-            state = "listening_for_wake_word"
+        valid_states = {
+            "idle_listening_for_wake_word",
+            "listening_for_wake_word",
+            "wake_detected",
+            "speaking_ack",
+            "waiting_for_command",
+            "recording_command",
+            "transcribing",
+            "processing_command",
+            "speaking_response",
+            "speaking",
+            "cooldown",
+        }
+        if state not in valid_states:
+            state = "idle_listening_for_wake_word"
         last_error_type = None
         last_error = None
         fix = None
 
     if running:
-        if state == "listening_for_wake_word":
+        if state in {"listening_for_wake_word", "idle_listening_for_wake_word"}:
             status_text = "Слушаю 24/7: скажите 'Джарвис'"
-        elif state == "speaking":
+        elif state in {"speaking", "speaking_response", "speaking_ack"}:
             status_text = "Джарвис говорит..."
         elif state == "cooldown":
             status_text = "Режим ожидания (cooldown)"
+        elif state == "wake_detected":
+            status_text = "Wake word услышан"
+        elif state == "waiting_for_command":
+            status_text = "Ожидание команды..."
+        elif state == "recording_command":
+            status_text = "Записываю команду..."
+        elif state == "transcribing":
+            status_text = "Распознавание речи..."
+        elif state == "processing_command":
+            status_text = "Обработка команды..."
         else:
             status_text = f"Активно ({state})"
     else:
@@ -1250,7 +1273,7 @@ def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -
 
     can_restart = not running
 
-    return {
+    response_payload = {
         "ok": ok,
         "data": {
             "enabled": enabled,
@@ -1268,8 +1291,18 @@ def make_listener_response(ok: bool, error_dict: dict[str, Any] | None = None) -
             "errors": status_dict["data"].get("errors", []),
             "warnings": status_dict["data"].get("warnings", [])
         },
-        "error": error_dict
+        "error": error_dict,
+        # Root-level keys for direct test assertions
+        "running": running,
+        "state": state,
+        "wake_words": list(settings.wake_words),
+        "last_wake_word": getattr(voice_listener, "last_wake_word", ""),
+        "last_transcript": getattr(voice_listener, "last_transcript", ""),
+        "last_command_text": getattr(voice_listener, "last_command_text", ""),
+        "last_error_type": last_error_type,
+        "last_error": last_error
     }
+    return response_payload
 
 
 @app.get("/voice/listener-status")
@@ -1587,6 +1620,24 @@ def settings_patch(request: SettingsPatchRequest) -> dict[str, Any]:
     patch = request.model_dump(exclude_none=True)
     updated = patch_settings(patch)
     return envelope(updated.sanitized())
+
+
+@app.get("/voice/history")
+def voice_history() -> dict[str, Any]:
+    from app.storage.history_store import history_store
+    return envelope(history_store.get_items())
+
+
+@app.get("/commands/history")
+def commands_history() -> dict[str, Any]:
+    from app.storage.history_store import history_store
+    return envelope(history_store.get_items())
+
+
+@app.get("/history")
+def generic_history() -> dict[str, Any]:
+    from app.storage.history_store import history_store
+    return envelope(history_store.get_items())
 
 
 @app.get("/commands")

@@ -79,7 +79,7 @@ def test_start_listener_allows_quiet_room(monkeypatch) -> None:
     body = response.json()
     assert body["ok"] is True
     assert body["data"]["running"] is True
-    assert body["data"]["state"] in {"starting", "listening_for_wake_word"}
+    assert body["data"]["state"] in {"starting", "listening_for_wake_word", "idle_listening_for_wake_word"}
     voice_listener.stop()
 
 

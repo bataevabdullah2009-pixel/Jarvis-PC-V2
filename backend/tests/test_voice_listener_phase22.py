@@ -165,7 +165,7 @@ def test_listener_rate_limit_prevents_loop():
         voice_listener.run_loop()
         
         # State transitions to cooldown and then back to listening_for_wake_word after time.sleep
-        assert voice_listener.state in {"listening_for_trigger", "listening_for_wake_word"}
+        assert voice_listener.state in {"listening_for_trigger", "listening_for_wake_word", "idle_listening_for_wake_word"}
         assert len(voice_listener.warnings) > 0
 
 

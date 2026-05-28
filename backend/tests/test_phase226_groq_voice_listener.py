@@ -241,7 +241,7 @@ def test_listener_autostart_success(monkeypatch: pytest.MonkeyPatch) -> None:
     result = voice_listener.start(device_id="default", force_start=False)
 
     assert result["data"]["running"] is True
-    assert result["data"]["state"] in {"idle", "listening_for_trigger", "listening_for_wake_word"}
+    assert result["data"]["state"] in {"idle", "listening_for_trigger", "listening_for_wake_word", "idle_listening_for_wake_word"}
     voice_listener.stop()
 
 
@@ -255,7 +255,7 @@ def test_listener_autostart_quiet_room_keeps_running(monkeypatch: pytest.MonkeyP
     result = voice_listener.start(device_id="default", force_start=False)
 
     assert result["data"]["running"] is True
-    assert result["data"]["state"] in {"starting", "listening_for_wake_word"}
+    assert result["data"]["state"] in {"starting", "listening_for_wake_word", "idle_listening_for_wake_word"}
     voice_listener.stop()
 
 

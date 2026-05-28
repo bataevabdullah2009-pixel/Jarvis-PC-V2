@@ -630,6 +630,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ device_id: deviceId ?? "default", duration_seconds: durationSeconds ?? 3 })
     }),
+  getHistory: () => request<any[]>("/voice/history"),
   sttStatus: () => request<SttStatusData>("/voice/stt-status"),
   listenerStatus: () => request<any>("/voice/listener-status"),
   listenerStart: (deviceId: string, wakeWord: boolean, clap: boolean) =>

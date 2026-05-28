@@ -301,6 +301,30 @@ class AssistantOrchestrator:
             "executed": bool(router_result.get("executed", True))
         }
 
+        # Add to persistent history store
+        try:
+            from app.storage.history_store import history_store
+            
+            # Map route category
+            hist_route = "ai"
+            if not response.get("ok") or response.get("mode") == "error":
+                hist_route = "error"
+            elif local_matched or response.get("mode") == "local":
+                hist_route = "local_command"
+            elif response.get("mode") == "ai_limited" or "fallback" in str(response.get("route", "")).lower() or response.get("route_detail") == "ai_fallback:missing_key":
+                hist_route = "fallback"
+
+            history_store.add_item(
+                command_id=response.get("command_id"),
+                user_text=text_val,
+                assistant_text=response.get("text", ""),
+                route=hist_route,
+                status=response.get("status", "completed"),
+                latency_ms=total_ms
+            )
+        except Exception as e:
+            self.logger.error("Failed to append command to history store: %s", e)
+
         # Log completion
         self.logger.info(
             "Assistant request completed: id=%s mode=%s intent=%s response='%s' spoken=%s latency=%sms",

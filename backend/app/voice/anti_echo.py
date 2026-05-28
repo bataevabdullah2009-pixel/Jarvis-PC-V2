@@ -63,6 +63,15 @@ def is_speaking_now() -> bool:
     return _speaking or (time.time() < _cooldown_until)
 
 
+def clear_tts_cooldown() -> None:
+    """Manually resets the speaking flag and cooldown period."""
+    global _speaking, _cooldown_until
+    _speaking = False
+    _cooldown_until = 0.0
+    logger.info("[ANTI-ECHO] Cooldown manually cleared for command recording.")
+
+
+
 def normalize_text(text: str) -> str:
     """Normalizes text for robust similarity comparison."""
     if not text:

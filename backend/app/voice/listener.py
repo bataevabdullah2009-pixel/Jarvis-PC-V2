@@ -501,7 +501,7 @@ class VoiceListener:
     def run_loop(self) -> None:
         """The continuous main loop running on the background thread."""
         settings = get_settings()
-        self.state = "listening_for_wake_word"
+        self.state = "idle_listening_for_wake_word"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
         while not self._stop_event.is_set():
@@ -528,14 +528,14 @@ class VoiceListener:
 
             # If speaking or in active cooldown, sleep briefly and skip
             if is_speaking_now():
-                if self.state != "speaking" and self.state != "cooldown":
-                    self.state = "speaking"
+                if self.state not in {"speaking", "speaking_ack", "speaking_response", "cooldown"}:
+                    self.state = "speaking_response"
                     event_bus.emit("voice.listener.state", {"state": self.state})
                 time.sleep(0.1)
                 continue
             else:
-                if self.state in {"speaking", "cooldown"}:
-                    self.state = "listening_for_wake_word"
+                if self.state in {"speaking", "speaking_ack", "speaking_response", "cooldown"}:
+                    self.state = "idle_listening_for_wake_word"
                     event_bus.emit("voice.listener.state", {"state": self.state})
 
             # Check if self-echo loop triggered in anti_echo
@@ -613,7 +613,7 @@ class VoiceListener:
 
         if not self.wake_word_enabled:
             self.last_ignored_reason = "wake_word_disabled"
-            self.state = "listening_for_wake_word"
+            self.state = "idle_listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
@@ -624,7 +624,7 @@ class VoiceListener:
         stt_res = stt.transcribe(capture)
         transcript = (stt_res.get("transcript") or "").strip()
         if not transcript:
-            self.state = "listening_for_wake_word"
+            self.state = "idle_listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
@@ -650,7 +650,7 @@ class VoiceListener:
         self.last_ignored_reason = wake["reason"]
         if not wake["triggered"]:
             self._inc_metric("ignored_no_wake_word")
-            self.state = "listening_for_wake_word"
+            self.state = "idle_listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
@@ -660,7 +660,8 @@ class VoiceListener:
         self._trigger_timestamps.append(time.time())
         self._inc_metric("triggers")
         self._inc_metric("wake_triggers")
-        self.state = "wake_word_detected"
+        
+        self.state = "wake_detected"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
         if not self.last_command_text:
@@ -670,22 +671,34 @@ class VoiceListener:
         self.send_to_assistant(self.last_command_text)
 
     def acknowledge_empty_wake(self) -> None:
-        """Reply briefly to a bare wake word without sending an AI request."""
+        """Reply briefly to a bare wake word and record next command."""
         settings = get_settings()
         address = settings.address()
         reply = f"Да, {address}?" if address else "Да?"
         try:
-            self.state = "speaking"
+            self.state = "speaking_ack"
             event_bus.emit("voice.listener.state", {"state": self.state})
             TTSService(settings).speak(reply, blocking=True)
         except Exception as exc:
             logger.warning("[LISTENER] Empty wake acknowledgement failed: %s", exc)
-        finally:
-            self.enter_cooldown("empty_wake_word")
+
+        # Clear anti-echo TTS cooldown from playing "Да, сэр"
+        try:
+            from app.voice.anti_echo import clear_tts_cooldown
+            clear_tts_cooldown()
+        except Exception as exc:
+            logger.warning("[LISTENER] Failed to clear TTS cooldown: %s", exc)
+
+        # Trigger command recording flow
+        self.record_command_after_trigger()
 
     def record_command_after_trigger(self) -> None:
-        """Triggers long command recording after finding a wake trigger."""
+        """Triggers command recording after finding a wake trigger."""
         settings = get_settings()
+        self.state = "waiting_for_command"
+        event_bus.emit("voice.listener.state", {"state": self.state})
+        time.sleep(0.1)
+
         self.state = "recording_command"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
@@ -701,20 +714,25 @@ class VoiceListener:
             )
         except Exception as e:
             logger.error("[LISTENER] Failed to capture command audio: %s", e)
-            self.state = "listening_for_wake_word"
+            self.state = "idle_listening_for_wake_word"
             event_bus.emit("voice.listener.state", {"state": self.state})
             return
 
         # Handle empty/silent command recording
         if capture.rms < settings.min_rms_threshold:
             logger.warning("[LISTENER] Captured command was completely silent.")
-            self.state = "listening_for_wake_word"
+            self.state = "speaking_response"
             event_bus.emit("voice.listener.state", {"state": self.state})
+            try:
+                TTSService(settings).speak("Сэр, я не расслышал команду.", blocking=True)
+            except Exception as exc:
+                logger.warning("[LISTENER] Speak 'not heard' failed: %s", exc)
+            self.enter_cooldown("silent_command")
             return
 
-        self.transcribe(capture)
+        self.transcribe_command(capture)
 
-    def transcribe(self, capture: Any) -> None:
+    def transcribe_command(self, capture: Any) -> None:
         """Transcribes the captured command audio using STT."""
         settings = get_settings()
         self.state = "transcribing"
@@ -722,12 +740,17 @@ class VoiceListener:
 
         stt = STTService(settings)
         stt_res = stt.transcribe(capture)
-        transcript = stt_res.get("transcript")
+        transcript = (stt_res.get("transcript") or "").strip()
 
         if not transcript:
             logger.info("[LISTENER] STT returned empty transcript for command.")
-            self.state = "listening_for_wake_word"
+            self.state = "speaking_response"
             event_bus.emit("voice.listener.state", {"state": self.state})
+            try:
+                TTSService(settings).speak("Сэр, я не расслышал команду.", blocking=True)
+            except Exception as exc:
+                logger.warning("[LISTENER] Speak 'not heard' failed: %s", exc)
+            self.enter_cooldown("empty_transcript")
             return
 
         logger.info("[LISTENER] Command transcript received: '%s'", transcript)
@@ -755,24 +778,29 @@ class VoiceListener:
             return
 
         wake = extract_wake_command(str(transcript), list(settings.wake_words))
-        self.last_ignored_reason = wake["reason"]
-        if not wake["triggered"]:
-            self._inc_metric("ignored_no_wake_word")
-            self.state = "listening_for_wake_word"
+        if wake["triggered"]:
+            cmd_text = wake["command_text"]
+        else:
+            cmd_text = str(transcript).strip()
+
+        is_bare_wake = cmd_text.lower() in [w.lower() for w in settings.wake_words]
+        if not cmd_text or is_bare_wake:
+            logger.info("[LISTENER] Command text is empty or only a wake word.")
+            self.state = "speaking_response"
             event_bus.emit("voice.listener.state", {"state": self.state})
+            try:
+                TTSService(settings).speak("Сэр, я не расслышал команду.", blocking=True)
+            except Exception as exc:
+                logger.warning("[LISTENER] Speak 'not heard' failed: %s", exc)
+            self.enter_cooldown("empty_command")
             return
 
-        self.last_wake_word = wake["wake_word"] or ""
-        self.last_command_text = wake["command_text"]
-        if not self.last_command_text:
-            self.acknowledge_empty_wake()
-            return
-
-        self.send_to_assistant(self.last_command_text)
+        self.last_command_text = cmd_text
+        self.send_to_assistant(cmd_text)
 
     def send_to_assistant(self, transcript: str) -> None:
         """Submits the transcribed text command to the assistant orchestrator."""
-        self.state = "sending_to_assistant"
+        self.state = "processing_command"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
         if not self._assistant_lock.acquire(blocking=False):
@@ -803,10 +831,9 @@ class VoiceListener:
         finally:
             self._assistant_lock.release()
 
-        # Transition to speaking when TTS starts, and then cooldown.
-        # But wait! mark_tts_started/mark_tts_completed inside tts playback already manages the speaking flag.
-        # We can enter cooldown here or let the TTS complete callback do it!
-        # Entering cooldown ensures we definitely unlock after command submission.
+        self.state = "speaking_response"
+        event_bus.emit("voice.listener.state", {"state": self.state})
+        
         self.enter_cooldown("command_completed")
 
     def enter_cooldown(self, reason: str) -> None:
@@ -823,9 +850,10 @@ class VoiceListener:
 
         time.sleep(cooldown_sec)
 
-        self.state = "listening_for_wake_word"
+        self.state = "idle_listening_for_wake_word"
         event_bus.emit("voice.listener.state", {"state": self.state})
 
 
 # Single global VoiceListener instance
 voice_listener = VoiceListener()
+

@@ -141,7 +141,7 @@ export function App() {
   };
 
   const refreshStatus = async () => {
-    const [health, appStatus, license, voice, ttsStatus, settings, devices, commands, debugEnv, aiProviderStatus, voiceProviderStatus, buildInfo, listenerStatus] = await Promise.all([
+    const [health, appStatus, license, voice, ttsStatus, settings, devices, commands, debugEnv, aiProviderStatus, voiceProviderStatus, buildInfo, listenerStatus, historyRes] = await Promise.all([
       api.fullHealth(),
       api.appStatus(),
       api.licenseStatus(),
@@ -154,7 +154,8 @@ export function App() {
       api.aiProviderStatus(),
       api.voiceProviderStatus(),
       api.buildInfo(),
-      api.listenerStatus()
+      api.listenerStatus(),
+      api.getHistory()
     ]);
     const isBackendAlive = Boolean(health.ok);
     setState((current) => ({
@@ -173,6 +174,7 @@ export function App() {
       voiceProviderStatus: voiceProviderStatus.ok ? voiceProviderStatus.data : current.voiceProviderStatus,
       buildInfo: buildInfo.ok ? buildInfo.data : current.buildInfo,
       listenerStatus: isBackendAlive && listenerStatus.ok ? listenerStatus.data : null,
+      history: historyRes.ok && historyRes.data ? historyRes.data : current.history,
       assistantStatus: isBackendAlive ? current.assistantStatus : "error",
       statusText: isBackendAlive ? current.statusText : "Ошибка",
       lastError: isBackendAlive ? current.lastError : "Backend не запущен. Запустите START_JARVIS.bat"
